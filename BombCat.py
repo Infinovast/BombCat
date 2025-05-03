@@ -5,7 +5,7 @@ BombCat
 规则说明：
 1. 初始手牌8张，其中1张必为拆除卡
 2. 抽到炸弹猫时必须使用拆除卡才能存活，否则立即死亡
-3. 攻击卡可使对手连续执行两个回合，跳过卡可跳过当前回合
+3. 攻击卡可使对手连续执行多个回合，跳过卡可跳过当前回合
 4. 牌堆用完后会使用弃牌堆重新洗牌
 
 扩展说明：
@@ -95,18 +95,19 @@ class SeeFutureCard(Card):
         super().__init__("预见未来", "查看牌堆顶的3张牌")
 
     def use(self, game, player, target):
-        top_cards = game.deck.cards[-3:] if len(game.deck.cards) >= 3 else game.deck.cards[:]
-        cards_info = [card.name for card in reversed(top_cards)]  # 从上到下显示
-
-        print(f"🔮 {player.name} 查看了牌堆顶的{len(cards_info)}张牌")
+        top_count = min(len(game.deck.cards), 3)
+        top_cards = list(reversed(game.deck.cards[-top_count:]))
+        print(f"🔮 {player.name} 查看了牌堆顶的{top_count}张牌")
 
         # 只展示给玩家，不展示给AI
         if not player.is_ai:
-            print(f"牌堆顶的牌（从上到下）: {cards_info}")
+            cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(top_cards)]
+            print("牌堆顶的牌（从上到下）:")
+            for info in cards_info:
+                print(info)
         else:
             # AI逻辑：记录牌堆顶部的情况
-            has_bomb = any(isinstance(card, BombCatCard) for card in top_cards)
-            if has_bomb and len(top_cards) > 0 and isinstance(top_cards[-1], BombCatCard):
+            if isinstance(top_cards[0], BombCatCard):
                 # 如果顶部是炸弹猫，标记此信息
                 game.ai_knows_bomb_on_top = True
                 print("🤖 现在AI知道牌堆顶有炸弹猫！（测试信息）")  # 测试信息
@@ -119,11 +120,7 @@ class AlterFutureCard(Card):
 
     def use(self, game, player, target):
         top_count = min(len(game.deck.cards), 3)
-        if top_count == 0:
-            print("牌堆已空！")
-            return
-
-        top_cards = game.deck.cards[-top_count:]
+        top_cards = list(reversed(game.deck.cards[-top_count:]))
         game.deck.cards = game.deck.cards[:-top_count]  # 移除这些牌
 
         print(f"🔄 {player.name} 正在重新排列牌堆顶的{top_count}张牌")
@@ -138,7 +135,7 @@ class AlterFutureCard(Card):
                     top_cards[bomb_idx], top_cards[-2] = top_cards[-2], top_cards[bomb_idx]
                     print("🤖 AI重新排列了牌堆顶的牌")
             # 将排序后的牌放回牌堆
-            for card in reversed(top_cards):  # 倒序添加以保持原先的顺序
+            for card in top_cards:  # 倒序添加以保持原先的顺序
                 game.deck.cards.append(card)
         else:
             # 玩家逻辑：显示卡牌并允许玩家重新排序
@@ -167,7 +164,7 @@ class AlterFutureCard(Card):
                     for card in reversed(reordered):  # 倒序添加以保持玩家指定的顺序
                         game.deck.cards.append(card)
                     break
-                except Exception:
+                except (ValueError, IndexError):
                     print("输入格式错误，请重新输入")
 
 class Deck:
@@ -291,6 +288,7 @@ class Game:
         self.remaining_turns = 1
         self.skip_draw = False
         self.end_turn = False
+        self.ai_knows_bomb_on_top = False
 
     def _init_hands(self):
         """初始化玩家手牌"""
@@ -333,7 +331,7 @@ class Game:
 
             sleep(0.5)  # 每次回合更换延时0.5秒
 
-        print("=== 游戏结束 ===")
+        print("\n=== 游戏结束 ===")
         print("胜者: AI" if self.ai.alive
               else "胜者: 玩家" if self.player.alive
               else "无人胜利")
