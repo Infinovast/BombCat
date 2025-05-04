@@ -74,7 +74,6 @@ class SkipCard(Card):
 
     def use(self, game, player, target):
         print(f"⏭️ {player.name} 跳过了回合")
-        game.skip_draw = True
         game.end_turn = True
 
 class ShuffleCard(Card):
@@ -87,6 +86,29 @@ class ShuffleCard(Card):
         print("🃏 牌堆被重新洗牌！")
         game.deck.shuffle()
 
+class SwapCard(Card):
+    """顶底互换卡"""
+
+    def __init__(self):
+        super().__init__("顶底互换", "交换牌堆顶部和底部的牌")
+
+    def use(self, game, player, target):
+        if len(game.deck.cards) > 1:
+            print(f"🔄 {player.name} 交换了牌堆顶部和底部的牌")
+            game.deck.cards[0], game.deck.cards[-1] = game.deck.cards[-1], game.deck.cards[0]
+        else:
+            print("牌堆中牌不足，无法进行顶底互换")
+
+class DrawBottomCard(Card):
+    """抽底卡"""
+
+    def __init__(self):
+        super().__init__("抽底", "抽取牌堆底部的牌而不是顶部")
+
+    def use(self, game, player, target):
+        print(f"👇 {player.name} 从牌堆底部抽牌")
+        player.draw_card(game.deck, from_bottom=True)
+        game.end_turn = True
 
 class SeeFutureCard(Card):
     """预见未来卡"""
@@ -186,6 +208,8 @@ class Deck:
             *[ShuffleCard() for _ in range(4)],  # 洗牌卡
             *[SeeFutureCard() for _ in range(4)],  # 预见未来卡
             *[AlterFutureCard() for _ in range(4)],  # 改变未来卡
+            *[DrawBottomCard() for _ in range(4)],  # 抽底卡
+            *[SwapCard() for _ in range(4)],  # 顶底互换卡
         ]
         self.cards = cards
 
@@ -193,7 +217,7 @@ class Deck:
         """洗牌操作"""
         random.shuffle(self.cards)
 
-    def draw(self, num=1, refuse=None):
+    def draw(self, num=1, from_bottom=False, refuse=None):
         """抽牌操作"""
         drawn = []
         for _ in range(num):
@@ -201,14 +225,14 @@ class Deck:
                 self.refill_from_discard()
             if self.cards:
                 if refuse:
-                    for card in self.cards:
+                    for card in self.cards if not from_bottom else reversed(self.cards):
                         if not any(isinstance(card, type(r)) for r in refuse):
                             # print(f"抽到 {card.name} 测试")  # 测试！
                             drawn.append(card)
                             self.cards.remove(card)
                             break
                 else:
-                    drawn.append(self.cards.pop())
+                    drawn.append(self.cards.pop(-1 if not from_bottom else 0))
         return drawn
 
     def refill_from_discard(self):
@@ -229,6 +253,7 @@ class Player:
     def __init__(self, name, is_ai=False):
         self.name = name
         self.hand = []
+        self.hand_limit = 9  # 设置手牌上限
         self.is_ai = is_ai
         self.alive = True
 
@@ -241,19 +266,19 @@ class Player:
         if card_type == "playable":
             return [c for c in self.hand if not isinstance(c, (DefuseCard, BombCatCard))]
         elif card_type == "defensive":
-            return [c for c in self.hand if isinstance(c, (SkipCard, AttackCard, ShuffleCard, AlterFutureCard))]
+            return [c for c in self.hand if isinstance(c, (SkipCard, AttackCard, ShuffleCard, DrawBottomCard, SwapCard, AlterFutureCard))]
         else:
-            return [c for c in self.hand if isinstance(c, card_type)]
+            return [c for c in self.hand if isinstance(c, card_type)] if isinstance(card_type, (type, tuple)) else []
 
-    def draw_card(self, deck):
+    def draw_card(self, deck, from_bottom=False):
         """抽牌逻辑处理"""
-        if drawn := deck.draw(1):
+        if drawn := deck.draw(1, from_bottom=from_bottom):
             card = drawn[0]
             if isinstance(card, BombCatCard):
                 self.handle_bomb_cat(card, deck)
             else:
                 self.hand.append(card)
-                print(f"{self.name} 抽到了 {card.name}")
+                print(f"🃏 {self.name} 抽到了 {card.name}")
 
     def handle_bomb_cat(self, bomb_card, deck):
         """处理炸弹猫逻辑"""
@@ -286,7 +311,6 @@ class Game:
         self._init_hands()
         self.current_player = self.player
         self.remaining_turns = 1
-        self.skip_draw = False
         self.end_turn = False
         self.ai_knows_bomb_on_top = False
 
@@ -303,14 +327,14 @@ class Game:
     def start(self):
         """游戏主循环"""
         os.system('cls' if os.name == 'nt' else 'clear')
-        print("游戏开始！")
+        print("Welcome to BombCat!\n游戏开始！")
         while all([self.player.alive, self.ai.alive]):
             current = self.current_player
             other = self.ai if current == self.player else self.player
 
             print(f"\n=== {current.name} 的回合 ===")
             print(f"当前牌堆: {len(self.deck.cards)}张")
-            print(f"手牌: {[c.name for c in current.hand]}")
+            print(f"手牌: {len(self.player.hand)}张, {[c.name for c in current.hand]}")
 
             print(f"下面开始 {current.name} 的回合，算上本回合还有 {self.remaining_turns} 个回合")
             self.handle_turn(current)
@@ -325,7 +349,6 @@ class Game:
                 self.current_player = other
 
             # 重置状态
-            self.skip_draw = False
             self.end_turn = False
             self.ai_knows_bomb_on_top = False
 
@@ -349,7 +372,7 @@ class Game:
                     cards = player.get_specific_cards('playable')
                     action = random.choice(['play', 'draw']) if cards else 'draw'
 
-                if action == 'play':
+                if action == 'play' or len(player.hand) >= player.hand_limit:
                     card = random.choice(cards)
                     print(f"🤖 使用 {card.name}")
                     card.use(self, player, self.get_other(player))
@@ -368,12 +391,14 @@ class Game:
             while True:
                 action = input("请选择：1)出牌 2)抽牌\n> ").lower()
                 cards = player.get_specific_cards('playable')
-                if action == '2' or not cards:
+                if (action == '2' or not cards) and len(player.hand) < player.hand_limit:
                     if action == '1':
                         print("没有可出的卡牌, 请抽牌")
                     player.draw_card(self.deck)
                     break
-                elif action == '1':
+                elif action == '1' or len(player.hand) >= player.hand_limit:
+                    if action == '2':
+                        print("手牌已满，请出牌")
                     self.play_card_menu(player)
                     if self.end_turn:
                         self.end_turn = False
