@@ -15,21 +15,24 @@ class Deck:
     def __init__(self):
         self.cards = []
         self.discard_pile = []
+        self.amounts = {BombCatCard: 3, DefuseCard: 3, AttackCard: 4, SkipCard: 3, ShuffleCard: 2,
+                        SeeFutureCard: 2, AlterFutureCard: 2, DrawBottomCard: 2, SwapCard: 2
+        }
         self._initialize_cards()
         self.shuffle()
 
     def _initialize_cards(self):
         # 卡牌配置区（可在此添加新卡牌）
         cards = [
-            *[BombCatCard() for _ in range(3)],  # 炸弹猫
-            *[DefuseCard() for _ in range(4)],  # 拆除卡
-            *[AttackCard() for _ in range(8)],  # 攻击卡
-            *[SkipCard() for _ in range(6)],  # 跳过卡
-            *[ShuffleCard() for _ in range(4)],  # 洗牌卡
-            *[SeeFutureCard() for _ in range(4)],  # 预见未来卡
-            *[AlterFutureCard() for _ in range(4)],  # 改变未来卡
-            *[DrawBottomCard() for _ in range(4)],  # 抽底卡
-            *[SwapCard() for _ in range(4)],  # 顶底互换卡
+            *[BombCatCard() for _ in range(self.amounts[BombCatCard])],  # 炸弹猫
+            *[DefuseCard() for _ in range(self.amounts[DefuseCard])],  # 拆除卡
+            *[AttackCard() for _ in range(self.amounts[AttackCard])],  # 攻击卡
+            *[SkipCard() for _ in range(self.amounts[SkipCard])],  # 跳过卡
+            *[ShuffleCard() for _ in range(self.amounts[ShuffleCard])],  # 洗牌卡
+            *[SeeFutureCard() for _ in range(self.amounts[SeeFutureCard])],  # 预见未来卡
+            *[AlterFutureCard() for _ in range(self.amounts[AlterFutureCard])],  # 改变未来卡
+            *[DrawBottomCard() for _ in range(self.amounts[DrawBottomCard])],  # 抽底卡
+            *[SwapCard() for _ in range(self.amounts[SwapCard])],  # 顶底互换卡
         ]
         self.cards = cards
 
@@ -266,7 +269,7 @@ class Game:
         bottom_idx = 0
 
         # 获取手牌中各种卡
-        atk_cards = self.ai.get_specific_cards((SkipCard, AttackCard, DrawBottomCard))
+        atk_cards = self.ai.get_specific_cards((SkipCard, AttackCard))
         sw = self.ai.get_specific_cards(SwapCard)
         sh = self.ai.get_specific_cards(ShuffleCard)
         db = self.ai.get_specific_cards(DrawBottomCard)
@@ -367,6 +370,7 @@ class GUI:
         # UI组件
         self.turn_label = None
         self.deck_label = None
+        self.bomb_label = None
         self.mode_label = None
         self.player_status = None
         self.ai_status = None
@@ -451,8 +455,14 @@ class GUI:
 
         # 更新游戏状态区的标签
         current = "玩家" if self.game.current_player == self.game.player else "AI"
-        self.turn_label.config(text=f"当前回合: {current} (剩余{self.game.remaining_turns}回合)")
+        color = "blue" if self.game.current_player == self.game.player else "black"  # 红色字体表示玩家回合
+        self.turn_label.config(foreground=color, text=f"当前回合: {current} (剩余{self.game.remaining_turns}回合)")
         self.deck_label.config(text=f"牌堆剩余: {len(self.game.deck.cards)}张")
+
+        bomb_prob = self.game.deck.amounts[BombCatCard] / len(self.game.deck.cards)
+        color = "darkred" if bomb_prob > 0.5 else "red" if bomb_prob > 0.4 else "orange" if bomb_prob > 0.3 else "green"
+        self.bomb_label.config(foreground=color, text=f"💣 {bomb_prob if bomb_prob <= 1 else 1:.1%}")
+
         self.mode_label.config(text=f"游戏模式: {'Debug' if self.debug_mode else '正常'}")
         player_status = "存活" if self.game.player.alive else "死亡"
         ai_status = "存活" if self.game.ai.alive else "死亡"
@@ -488,8 +498,8 @@ class GUI:
         status = ttk.LabelFrame(main, text="游戏状态", padding="5")
         status.pack(fill="x", pady=5)
         labels = [("turn_label", "当前回合: 未开始"), ("deck_label", "牌堆剩余: 0"),
-                  ("player_status", "玩家状态: 存活"), ("ai_status", "AI状态: 存活"),
-                  ("mode_label", "游戏模式: 正常")
+                  ("bomb_label", "💣 0.0%"), ("player_status", "玩家状态: 存活"),
+                  ("ai_status", "AI状态: 存活"), ("mode_label", "游戏模式: 正常")
                   ]
         for i, (attr, text) in enumerate(labels):
             setattr(self, attr, ttk.Label(status, text=text))
