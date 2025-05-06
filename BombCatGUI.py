@@ -2,12 +2,12 @@
 BombCatGUI
 爆炸猫游戏的图形界面实现
 """
-
 import tkinter as tk
 from tkinter import ttk
+from typing import Literal
 import random
 from BombCat import *
-
+from ctypes import windll
 
 class Deck:
     """牌堆管理器"""
@@ -23,7 +23,7 @@ class Deck:
         cards = [
             *[BombCatCard() for _ in range(3)],  # 炸弹猫
             *[DefuseCard() for _ in range(4)],  # 拆除卡
-            *[AttackCard() for _ in range(6)],  # 攻击卡
+            *[AttackCard() for _ in range(8)],  # 攻击卡
             *[SkipCard() for _ in range(6)],  # 跳过卡
             *[ShuffleCard() for _ in range(4)],  # 洗牌卡
             *[SeeFutureCard() for _ in range(4)],  # 预见未来卡
@@ -81,7 +81,7 @@ class Player:
         return any(isinstance(c, DefuseCard) for c in self.hand)
 
     def get_specific_cards(self, card_type):
-        """获取可主动使用的卡牌"""
+        """获取手牌中指定卡牌"""
         if card_type == "playable":
             return [c for c in self.hand if not isinstance(c, (DefuseCard, BombCatCard))]
         elif card_type == "defensive":
@@ -104,22 +104,18 @@ class Game:
         self.current_player = self.player
         self.waiting_for_input = True
         self.end_turn = False
-        self.ai_knows_bomb_on_top = False
         self.game_running = False  # Game初始化的时候游戏未开始，在start_game()中才设置为True
+        self.ai_known = ["unknown"] * len(self.deck.cards)  # AI 对牌堆每张牌的认知：Card 实例 或 "unknown"
 
         # 如果有GUI，设置引用
         if gui:
             gui.set_game(self)
 
     def _init_hands(self):
-        """初始化玩家手牌"""
+        """初始化双方手牌"""
         for p in [self.player, self.ai]:
-            # 强制加入一张拆除卡
-            defuse = next(c for c in self.deck.cards if isinstance(c, DefuseCard))
-            self.deck.cards.remove(defuse)
-            p.hand.append(defuse)
-            # 抽7张牌
-            p.hand.extend(self.deck.draw(7, refuse=[BombCatCard()]))
+            p.hand.append(DefuseCard())  # 强制加入一张拆除卡
+            p.hand.extend(self.deck.draw(5, refuse=[BombCatCard()]))  # 再抽5张牌
 
     def play_card(self, player, card):
         """处理出牌逻辑"""
@@ -147,10 +143,16 @@ class Game:
         if player == self.current_player:
             if len(player.hand) >= player.hand_limit:
                 if self.gui:
-                    self.gui.print(f"😔 {player.name}手牌已满 ({self.player.hand_limit})，请先出牌！")
+                    self.gui.print(f"🈵 {player.name}手牌已满 (上限为{self.player.hand_limit}张)，请先出牌！")
                 return False
 
             if drawn := self.deck.draw(1, from_bottom=from_bottom):
+                # 同步移除 ai_known 中对应位置
+                if from_bottom:
+                    self.ai_known.pop(0)
+                else:
+                    self.ai_known.pop(-1)
+
                 card = drawn[0]
                 if isinstance(card, BombCatCard):
                     self._handle_bomb_cat(player, card)
@@ -196,18 +198,21 @@ class Game:
                     else:
                         self.gui.print(f"🤖 AI将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
                 self.deck.insert_card(bomb_card, pos)
+                self.ai_known.insert(pos, bomb_card)  # 同步更新 AI 对牌堆的认知
             else:
                 # 让GUI处理玩家选择
                 if self.gui:
-                    position = self.gui.prompt_bomb_position(len(self.deck.cards))
-                    if position is not None:
-                        self.deck.insert_card(bomb_card, position)
+                    pos = self.gui.prompt_bomb_position(len(self.deck.cards))
+                    if pos is not None:
+                        self.deck.insert_card(bomb_card, pos)
+                        self.ai_known.insert(pos, "unknown")
                     else:
                         # 默认放在随机位置
                         pos = random.randint(0, len(self.deck.cards))
                         if self.gui:
                             self.gui.print(f"默认将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
                         self.deck.insert_card(bomb_card, pos)
+                        self.ai_known.insert(pos, "unknown")
 
             if self.gui and self.remaining_turns > 1:
                 self.gui.print(f"{player.name}剩余的 {self.remaining_turns - 1} 个回合全部结束")
@@ -233,7 +238,7 @@ class Game:
             if self.current_player.is_ai:
                 self.gui.schedule_ai_turn()
             else:
-                self.gui.print("\n────────── 🎉 玩家回合 ──────────")
+                self.gui.print("\n────────── 👤 玩家回合 ──────────\n🧠 玩家正在思考...")
 
         self.check_game_end()
         if self.gui:
@@ -248,31 +253,88 @@ class Game:
             return True
         return False
 
+    def ai_control(self):
+        """
+        基于 ai_known 决策 AI 行为: 1. 抢拆除卡 2. 避开已知炸弹
+        Returns:
+            tuple: 返回值格式为 ('play', [可用卡牌]) 或 ('draw', None)
+        """
+        # 已知的炸弹和拆除卡在牌堆中的位置
+        bomb_pos = [i for i, c in enumerate(self.ai_known) if isinstance(c, BombCatCard)]
+        defuse_pos = [i for i, c in enumerate(self.ai_known) if isinstance(c, DefuseCard)]
+        top_idx = len(self.ai_known) - 1
+        bottom_idx = 0
+
+        # 获取手牌中各种卡
+        atk_cards = self.ai.get_specific_cards((SkipCard, AttackCard, DrawBottomCard))
+        sw = self.ai.get_specific_cards(SwapCard)
+        sh = self.ai.get_specific_cards(ShuffleCard)
+        db = self.ai.get_specific_cards(DrawBottomCard)
+
+        # 1. 若已知拆除卡位置，手中无拆除卡则必抢牌，否则随机
+        if defuse_pos and (not self.ai.has_defuse() or random.random() < 0.7):
+            # 拆除卡在顶，直接抽牌
+            if defuse_pos[-1] == top_idx:
+                return 'draw', None
+            # 拆除卡在底，优先出“抽底卡”再抽
+            if defuse_pos[0] == bottom_idx:
+                if db:
+                    return 'play', db
+                if sw:
+                    return 'play', sw
+            # 否则尝试用“顶底互换”将目标拉到可抽位置
+            if sw:
+                return 'play', sw
+            # 最后才抽牌
+            return 'draw', None
+
+        # 2. 若已知炸弹猫位置，进攻玩家或绕过
+        if bomb_pos:
+            # 炸弹猫在顶
+            if bomb_pos[-1] == top_idx:
+                # 有进攻牌（跳过/攻击/抽底）则使用
+                if atk_cards:
+                    return 'play', random.choice(atk_cards)
+                # 否则尝试交换或洗牌
+                if sw:
+                    return 'play', sw
+                if sh:
+                    return 'play', sh
+
+            # 如果炸弹猫在第2张且下回合是玩家，直接抽走第1张
+            if bomb_pos[-1] == top_idx - 1 and self.remaining_turns == 1:
+                return 'draw', None
+
+            # 如果炸弹猫在底部且有进攻牌，尝试用顶底互换然后下次进函数时跳过自己
+            if bomb_pos[0] == bottom_idx and sw and atk_cards:
+                return 'play', sw
+
+        # 3. 常规逻辑：手牌满时优先出牌，否则随机
+        cards = self.ai.get_specific_cards('playable')
+        if len(self.ai.hand) >= self.ai.hand_limit:
+            return 'play', random.choice(cards)
+        if cards:
+            return random.choice([('play', cards), ('draw', None)])
+        return 'draw', None
+
+
     def run_ai_turn(self):
         """执行AI回合"""
         if self.current_player != self.ai or not self.ai.alive:
             return
 
         if self.gui:
-            self.gui.print("\n────────── 🤖 AI回合 ──────────\n🤖 AI正在思考...")
+            self.gui.print("\n────────── 🤖 AI回合 ──────────\n💡 AI正在思考...")
 
         # AI决策逻辑
         while self.current_player == self.ai and self.ai.alive:
-            # 检查是否知道顶牌是炸弹猫
-            if self.ai_knows_bomb_on_top:
-                cards = self.ai.get_specific_cards('defensive')
-                action = 'play' if cards else 'draw'
-                self.ai_knows_bomb_on_top = False
-            elif len(self.ai.hand) >= self.ai.hand_limit:
-                cards = self.ai.get_specific_cards('playable')
-                action = 'play'
-            else:
-                # AI随机选择行动
-                cards = self.ai.get_specific_cards('playable')
-                action = random.choice(['play', 'draw']) if cards and len(self.ai.hand) < self.ai.hand_limit else 'draw'
-
+            # 新：统一由 control_ai 决定
+            action, cards = self.ai_control()
             if action == 'play' and cards:
-                card = random.choice(cards)
+                if isinstance(cards, list):
+                    card = cards[0]  # 只出一张，每个元素都一样
+                else:
+                    card = cards
                 self.play_card(self.ai, card)
                 if self.end_turn:
                     break
@@ -293,12 +355,9 @@ class Game:
 class GUI:
     """图形用户界面类"""
 
-    def __init__(self, root, debug_mode=False):
+    def __init__(self, _root, debug_mode=False):
         # 设置窗口属性
-        self.root = root
-        self.root.title("BombCat-GUI")
-        self.root.geometry("800x600")
-        self.root.resizable(True, True)
+        self.root = _root
 
         # 界面变量
         self.player_cards_var = None
@@ -325,6 +384,8 @@ class GUI:
         # 游戏引用
         self.debug_mode = debug_mode
         self.game = Game(gui=self)
+        windll.user32.ShowWindow(windll.kernel32.GetConsoleWindow(), self.debug_mode)
+
 
     def set_game(self, game):
         """设置游戏引用"""
@@ -370,8 +431,8 @@ class GUI:
         self.play_button.config(state=tk.NORMAL)
         # self.start_button.config(state=tk.DISABLED)
 
-        # 更新界面
-        self.print("[🐱 BombCat 爆炸猫]\n游戏开始！\n\n────────── 🎉 玩家回合 ──────────")
+        # 更新初始界面
+        self.print("[🐱 BombCat 爆炸猫]\n游戏开始！\n\n────────── 👤 玩家回合 ──────────\n🧠 玩家正在思考...")
         self.update_gui()
 
     def update_gui(self):
@@ -403,6 +464,22 @@ class GUI:
 
     def init_window(self):
         """创建并初始化GUI窗口"""
+        # 设置窗口标题和大小
+        self.root.attributes("-topmost", True)  # 设置窗口置顶，下面再取消强制置顶
+        self.root.title("BombCat-GUI")
+        self.root.resizable(True, True)
+        self.root.attributes("-topmost", False)  # 取消强制置顶
+
+        # 窗口居中
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        window_width = 800
+        window_height = 600
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        self.root.update_idletasks()  # 更新窗口信息
+
         # 创建主窗口框架
         main = ttk.Frame(self.root, padding="10")
         main.pack(fill="both", expand=True)
@@ -433,6 +510,7 @@ class GUI:
 
         # 玩家和AI手牌
         for side, name, is_player in [("left", "玩家", True), ("right", "AI", False)]:
+            side: Literal["left", "right", "top", "bottom"]  # 明确类型
             frame = ttk.LabelFrame(hands, text=f"{name}手牌", padding="5")
             frame.pack(side=side, fill="both", expand=True)
 
@@ -461,7 +539,9 @@ class GUI:
             for attr, text, cmd, opts in buttons:
                 btn = ttk.Button(frame, text=text, command=cmd, **opts)
                 setattr(self, attr, btn)
-                btn.pack(side="left", padx=5)
+                btn.pack(side="left", padx=5, expand=True)
+
+        self.quit_button.bind('<Button-3>', lambda e: self.toggle_debug_mode())  # 绑定右键单击为切换调试模式
 
     def handle_player_draw(self):
         """处理玩家抽牌"""
@@ -469,28 +549,25 @@ class GUI:
             return
 
         if self.game.current_player != self.game.player:
-            messagebox.showinfo("提示", "现在不是你的回合！")
+            messagebox.showinfo("提示", "❌ 现在不是你的回合！")
             return
 
         if len(self.game.player.hand) >= self.game.player.hand_limit:
-            messagebox.showinfo("提示", f"😔 手牌已满 ({self.game.player.hand_limit})，请先出牌！")
+            messagebox.showinfo("提示", f"🈵 手牌已满 (上限为{self.game.player.hand_limit}张)，请先出牌！")
             return
 
         self.game.draw_card(self.game.player)
 
     def handle_player_play(self):
         """处理玩家出牌"""
-        if not self.game:
-            return
-
-        if self.game.current_player != self.game.player:
-            messagebox.showinfo("提示", "现在不是你的回合！")
+        if not self.game or self.game.current_player != self.game.player:
+            messagebox.showinfo("提示", "❌ 现在不是你的回合！")
             return
 
         player = self.game.player
         cards = player.get_specific_cards('playable')
         if not cards:
-            messagebox.showinfo("提示", "没有可用的卡牌")
+            messagebox.showinfo("提示", "🈳 没有可用的卡牌")
             return
 
         # 创建卡牌选择对话框
@@ -500,14 +577,14 @@ class GUI:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        # 居中显示对话框
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
-        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
+        # 在主窗口上居中显示对话框
+        x = self.root.winfo_x() + self.root.winfo_width() // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
         dialog.geometry(f'+{x}+{y}')
+        dialog.update_idletasks()
 
         # 创建卡牌列表
-        tk.Label(dialog, text="选择要使用的卡牌:").pack(pady=10)
+        tk.Label(dialog, text="🃏 选择要使用的卡牌:").pack(pady=10)
         card_list = tk.Listbox(dialog, height=10, width=50)
         card_list.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -518,33 +595,38 @@ class GUI:
             """使用选中的卡牌"""
             selection = card_list.curselection()
             if not selection:
-                messagebox.showinfo("提示", "请先选择一张卡牌")
+                messagebox.showinfo("提示", "🈳 请先选择一张卡牌")
                 return
 
             index = selection[0]
-            card = cards[index]
+            self.game.play_card(player, cards[index])  # 调用游戏逻辑处理出牌
             dialog.destroy()
-
-            # 调用游戏逻辑处理出牌
-            self.game.play_card(player, card)
 
         # 绑定双击事件
         card_list.bind('<Double-1>', lambda e: use_selected_card())
 
         # 添加按钮
         btn_frame = tk.Frame(dialog)
-        btn_frame.pack(fill="x", pady=10)
-        tk.Button(btn_frame, text="确认", command=use_selected_card).pack(side="left", padx=10, expand=True)
-        tk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side="right", padx=10, expand=True)
+        btn_frame.pack(fill="x", pady=5)
+        tk.Button(btn_frame, text="确认", command=use_selected_card, width=10, height=5).pack(side="left", padx=10, expand=True)
+        tk.Button(btn_frame, text="取消", command=dialog.destroy, width=10, height=5).pack(side="right", padx=10, expand=True)
+
+    def toggle_debug_mode(self, config=None):
+        """切换调试模式"""
+        if config:
+            self.debug_mode = config
+        else:
+            self.debug_mode = not self.debug_mode
+        self.update_gui()
+        windll.user32.ShowWindow(windll.kernel32.GetConsoleWindow(), self.debug_mode)  # 根据 debug_mode 决定是否隐藏命令行窗口
+        messagebox.showinfo("Debug模式", f"💻 Debug模式{'开启' if self.debug_mode else '关闭'}")
 
     def prompt_bomb_position(self, max_pos):
         """提示玩家选择炸弹猫放回位置"""
-        position = simpledialog.askinteger("选择位置",
-                                          f"将炸弹猫放回的位置 (底部 0-顶部 {max_pos})：",
-                                          minvalue=0, maxvalue=max_pos)
-        if position is not None:
-            self.print(f"🐱 将炸弹猫放回第 {position} 位")
-        return position
+        pos = simpledialog.askinteger("选择位置", f"📍 将炸弹猫放回的位置 (底部 0-顶部 {max_pos})：", minvalue=0, maxvalue=max_pos)
+        if pos is not None:
+            self.print(f"📍 将炸弹猫放回第 {pos} 位")
+        return pos
 
     def schedule_ai_turn(self):
         """安排AI回合"""
@@ -582,5 +664,5 @@ class GUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = GUI(root, debug_mode=False)
+    GUI(root, debug_mode=False)
     root.mainloop()
