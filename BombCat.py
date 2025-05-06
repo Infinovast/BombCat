@@ -3,7 +3,7 @@ BombCat
 爆炸猫游戏卡牌库
 
 规则说明：
-1. 初始手牌8张，其中1张必为拆除卡；手牌上限9张
+1. 初始手牌6张，其中1张必为拆除卡；手牌上限9张
 2. 抽到炸弹猫时必须使用拆除卡才能存活，否则立即死亡
 3. 攻击卡可使对手连续执行多个回合，跳过卡可跳过一个回合
 4. 牌堆用完后会自动使用弃牌堆重新洗牌
@@ -82,6 +82,7 @@ class ShuffleCard(Card):
     def use(self, game, player, target):
         game.gui.print("🃏 牌堆被重新洗牌！")
         game.deck.shuffle()
+        game.ai_known = ["unknown"] * len(game.deck.cards)  # 洗牌后 AI 对所有牌的信息全部失效
 
 class SwapCard(Card):
     """顶底互换卡"""
@@ -93,6 +94,7 @@ class SwapCard(Card):
         if len(game.deck.cards) > 1:
             game.gui.print(f"🔄 {player.name} 交换了牌堆顶部和底部的牌")
             game.deck.cards[0], game.deck.cards[-1] = game.deck.cards[-1], game.deck.cards[0]
+            game.ai_known[0], game.ai_known[-1] = game.ai_known[-1], game.ai_known[0]  # 同步交换 AI 已知信息
         else:
             game.gui.print("😔 牌堆中牌不足，无法进行顶底互换")
 
@@ -104,8 +106,7 @@ class DrawBottomCard(Card):
 
     def use(self, game, player, target):
         game.gui.print(f"👇 {player.name} 从牌堆底部抽牌")
-        game.draw_card(player, from_bottom=True)
-        # game.end_turn = True
+        game.draw_card(player, from_bottom=True)  # draw_card 会自动结束回合 和 记录ai_known
 
 class SeeFutureCard(Card):
     """预见未来卡"""
@@ -122,18 +123,18 @@ class SeeFutureCard(Card):
         top_cards = list(reversed(game.deck.cards[-top_count:]))  # 获取顶部的牌
         game.gui.print(f"🔮 {player.name} 查看了牌堆顶的{top_count}张牌")
 
-        # 只展示给玩家，不展示给AI
-        if not player.is_ai:
+        # AI：记录这 top_count 张牌的实例
+        if player.is_ai:
+            for i, card in enumerate(top_cards):
+                idx = len(game.deck.cards) - 1 - i
+                game.ai_known[idx] = card
+            game.gui.print(f"🤖 AI 记录了牌堆顶{top_count}张牌的信息")
+        # 玩家
+        else:
             cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(top_cards)]
-            game.gui.print("牌堆顶的牌（从上到下）:")
+            game.gui.print("🔽 牌堆顶的牌（从上到下）:")
             for info in cards_info:
                 game.gui.print(info)
-        else:
-            # AI逻辑：记录牌堆顶部的情况
-            if top_count > 0 and isinstance(top_cards[-1], BombCatCard):
-                # 如果顶部是炸弹猫，标记此信息
-                game.ai_knows_bomb_on_top = True
-                game.gui.print("🤖 现在AI知道牌堆顶有炸弹猫！", debug=True)  # 测试信息
 
 class AlterFutureCard(Card):
     """改变未来卡"""
@@ -145,6 +146,8 @@ class AlterFutureCard(Card):
         top_count = min(len(game.deck.cards), 3)
         top_cards = list(reversed(game.deck.cards[-top_count:]))  # 反转顺序
         game.deck.cards = game.deck.cards[:-top_count]  # 移除这些牌
+        del game.ai_known[-top_count:]  # 同步删除 ai_known 顶部 top_count 条目
+
         game.gui.print(f"🔄 {player.name} 正在重新排列牌堆顶的{top_count}张牌")
 
         # AI逻辑：将爆炸猫（如果有）放在第2张位置
@@ -153,20 +156,25 @@ class AlterFutureCard(Card):
             if bomb_cats and top_count > 1:
                 bomb_idx = bomb_cats[0]
                 if top_count >= 2:
-                    top_cards[bomb_idx], top_cards[-2] = top_cards[-2], top_cards[bomb_idx]
+                    if game.remaining_turns == 1:
+                        top_cards[bomb_idx], top_cards[-2] = top_cards[-2], top_cards[bomb_idx]
+                    else:  # 如果下回合还是 AI，则放在最后一张
+                        top_cards[bomb_idx], top_cards[-1] = top_cards[-1], top_cards[bomb_idx]
                     game.gui.print("🤖 AI重新排列了牌堆顶的牌")
+
             # 将排序后的牌放回牌堆
             for card in top_cards:  # 倒序添加以保持原先的顺序
                 game.deck.cards.append(card)
+            game.ai_known.extend(top_cards)  # AI 知道新顺序，直接写入 card 对象
 
         # 玩家逻辑：使用tkinter对话框让玩家重新排序卡牌
         else:
             # 创建卡牌列表和对话框
-            card_info = [f"{i + 1}. {card.name}" for i, card in enumerate(top_cards)]
+            cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(top_cards)]
             result = simpledialog.askstring(
                 "重新排序卡牌",
-                f"请输入新的顺序（{', '.join(card_info)}）\n"
-                f"输入数字序列，用空格分隔（例如：3 1 2）："
+                f"🔁 请输入新的顺序（{', '.join(cards_info)}）\n🔢 输入数字序列，用空格分隔（例如：3 1 2）：",
+                parent=game.gui.root  # 设置出牌菜单为主窗口
             )
 
             try:
@@ -191,5 +199,12 @@ class AlterFutureCard(Card):
                 reordered = top_cards
 
             # 将排序后的牌放回牌堆
+            game.gui.print("🔽 现在牌堆顶的牌（从上到下）:")
+            cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(reordered)]
+            for info in cards_info:
+                game.gui.print(info)
             for card in reversed(reordered):
                 game.deck.cards.append(card)
+
+            # 更新 AI 已知信息
+            game.ai_known.extend(["unknown"] * top_count)  # 玩家重排后，AI 不知道新顺序
