@@ -1,7 +1,7 @@
 # BombCat
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/dba85fa8-565b-44f9-974a-cc2fc333b8e8" alt="title-pic">
+  <img src="Header.png" alt="title-pic">
 </p>
 
 A simple man-machine battle game inspired by Exploring Kittens.
