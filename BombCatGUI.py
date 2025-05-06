@@ -105,7 +105,7 @@ class Game:
         self.waiting_for_input = True
         self.end_turn = False
         self.ai_knows_bomb_on_top = False
-        self.game_running = True
+        self.game_running = False  # Game初始化的时候游戏未开始，在start_game()中才设置为True
 
         # 如果有GUI，设置引用
         if gui:
@@ -120,12 +120,6 @@ class Game:
             p.hand.append(defuse)
             # 抽7张牌
             p.hand.extend(self.deck.draw(7, refuse=[BombCatCard()]))
-
-    def start_game(self):
-        """开始游戏"""
-        if self.gui:
-            self.gui.print("[BombCat 爆炸猫]\n游戏开始！\n\n────────── 🎉 玩家回合 ──────────")
-            self.gui.update_gui()
 
     def play_card(self, player, card):
         """处理出牌逻辑"""
@@ -149,6 +143,7 @@ class Game:
 
     def draw_card(self, player, from_bottom=False):
         """处理抽牌逻辑"""
+        all_end = False
         if player == self.current_player:
             if len(player.hand) >= player.hand_limit:
                 if self.gui:
@@ -159,6 +154,7 @@ class Game:
                 card = drawn[0]
                 if isinstance(card, BombCatCard):
                     self._handle_bomb_cat(player, card)
+                    all_end = True  # 如果抽到炸弹猫，结束所有回合
                 else:
                     player.hand.append(card)
                     if self.gui:
@@ -170,7 +166,7 @@ class Game:
                 if self.gui:
                     self.gui.update_gui()
 
-                self._end_turn()  # 抽牌后结束回合!
+                self._end_turn(all_end)  # 抽牌后结束回合!
                 return True
             else:
                 if self.gui:
@@ -212,26 +208,32 @@ class Game:
                         if self.gui:
                             self.gui.print(f"默认将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
                         self.deck.insert_card(bomb_card, pos)
+
+            if self.gui and self.remaining_turns > 1:
+                self.gui.print(f"{player.name}剩余的 {self.remaining_turns - 1} 个回合全部结束")
+
         else:
             if self.gui:
                 self.gui.print(f"💥 {player.name}没有拆除卡！爆炸了！")
             player.alive = False
             self.check_game_end()
 
-    def _end_turn(self):
+    def _end_turn(self, all_end=False):
         """结束回合处理"""
-        if self.remaining_turns > 0:
+        if all_end:  # 如果抽到炸弹猫，结束所有回合
+            self.remaining_turns = 1
+            self.current_player = self.get_other(self.current_player)
+        elif self.remaining_turns > 0:
             self.remaining_turns -= 1
             if self.remaining_turns == 0:
                 self.remaining_turns = 1
                 self.current_player = self.get_other(self.current_player)
 
-            if all((self.current_player == self.player, self.ai.alive, self.player.alive, self.gui)):
-                self.gui.print("\n────────── 🎉 玩家回合 ──────────")
-
-            # 如果切换到AI回合或AI回合还有剩，触发AI行动
-            if all((self.current_player.is_ai, self.ai.alive, self.player.alive, self.gui)):
+        if self.ai.alive and self.player.alive and self.gui:
+            if self.current_player.is_ai:
                 self.gui.schedule_ai_turn()
+            else:
+                self.gui.print("\n────────── 🎉 玩家回合 ──────────")
 
         self.check_game_end()
         if self.gui:
@@ -347,20 +349,29 @@ class GUI:
             self.log_text.config(state="disabled")
 
     def start_game(self):
-        """启动新游戏"""
+        """启动新游戏/重新启动游戏"""
+        if self.game.game_running:
+            if messagebox.askyesno("确认", "游戏正在进行，是否重新开始？"):
+                self.game = Game(gui=self)  # 初始化，但不重新创建GUI
+            else:
+                return
+        elif not self.game.ai.alive or not self.game.player.alive:
+            self.game = Game(gui=self)
+
+        self.game.game_running = True  # 游戏这时才开始
+
         # 清空日志
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", tk.END)
         self.log_text.config(state="disabled")
 
-        self.game.start_game()
-
         # 启用玩家操作按钮
         self.draw_button.config(state=tk.NORMAL)
         self.play_button.config(state=tk.NORMAL)
-        self.start_button.config(state=tk.DISABLED)
+        # self.start_button.config(state=tk.DISABLED)
 
         # 更新界面
+        self.print("[🐱 BombCat 爆炸猫]\n游戏开始！\n\n────────── 🎉 玩家回合 ──────────")
         self.update_gui()
 
     def update_gui(self):
@@ -430,7 +441,7 @@ class GUI:
             label = ttk.Label(frame, textvariable=getattr(self, var_name))
             if is_player:
                 self.player_cards = label
-                label.configure(wraplength=350)
+                label.configure(wraplength=600)
             label.pack(fill="both", expand=True)
 
         # 按钮区域
