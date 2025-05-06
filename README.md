@@ -1,4 +1,9 @@
 # BombCat
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/dba85fa8-565b-44f9-974a-cc2fc333b8e8" alt="title-pic">
+</p>
+
 A simple man-machine battle game inspired by Exploring Kittens.
 
 _The current version of the game is relatively simple, but please look forward to adding English, GUI(finished) and LAN online battles in the future! :)_
