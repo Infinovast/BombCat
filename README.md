@@ -14,6 +14,6 @@ Running in the GUI:
 
 Or on the console (v1.1.0): 
 
-![1](https://github.com/user-attachments/assets/57435495-486c-408a-a6ef-2fea692502d4)
+![1](https://github.com/Infinovast/BombCat/blob/main/Pic/0.png)
 
 To know more, go to the Release and give it a try!
