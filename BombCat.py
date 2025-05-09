@@ -13,7 +13,7 @@ BombCat
    b. 在Deck._initialize_cards中添加卡牌数量
    c. 在卡牌类中实现use方法处理效果
 """
-from tkinter import simpledialog, messagebox
+import tkinter as tk
 
 class Card:
     """卡牌基类"""
@@ -31,7 +31,7 @@ class BombCatCard(Card):
     """炸弹猫卡"""
 
     def __init__(self):
-        super().__init__("炸弹猫", "抽到时必须立即拆除，否则死亡")
+        super().__init__("💣炸弹猫", "抽到时必须立即拆除，否则死亡")
 
     def use(self, game, player, target):
         # 实际处理逻辑在抽牌阶段实现
@@ -41,46 +41,73 @@ class DefuseCard(Card):
     """拆除卡"""
 
     def __init__(self):
-        super().__init__("拆除", "拆除炸弹猫并放回牌堆")
+        super().__init__("🛠拆除", "拆除炸弹猫并放回牌堆某处")
 
     def use(self, game, player, target):
         # 实际处理逻辑在抽牌阶段实现
         pass
 
+class NopeCard(Card):
+    """
+    拒绝卡
+    现在允许在双方回合使用，但后面会改为只在己方回合可用
+    """
+
+    def __init__(self):
+        super().__init__("🚫拒绝", "打出后，使对手出的下一张牌失效")
+
+    def use(self, game, player, target):
+        if player.is_ai:
+            game.gui.print(f"🚫 AI 打出拒绝，玩家 下次出牌将失效", debug=True)
+        else:
+            game.gui.print(f"🚫 玩家 打出拒绝，AI 下次出牌将失效")
+        game.noped = target
+
 class AttackCard(Card):
     """攻击卡"""
 
     def __init__(self):
-        super().__init__("攻击", "让对手执行你的所有回合")
+        super().__init__("👊攻击", "让对手执行你的所有回合")
 
     def use(self, game, player, target):
         game.gui.print(f"🔥 {player.name} 发动攻击！{target.name} 将要连续行动 {game.remaining_turns + 1} 回合")
         game.remaining_turns += 2  # 在当前回合基础上加2个回合，因为原有的回合会在handle_turn结束后减掉
         game.current_player = target
-        game.end_turn = True
+        game.end_turn = True  # 注意：不能用all_end！攻击是转移回合给对手，而不是清空回合再轮到对手
         
-        # 关键修复：如果目标是AI，则立即调度AI回合
-        if target.is_ai and game.gui:
-            game.gui.schedule_ai_turn()
+        # # 如果目标是AI，则立即调度AI回合
+        # if target.is_ai and game.gui:
+        #     game.gui.schedule_ai_turn()
 
 class SkipCard(Card):
     """跳过卡"""
 
     def __init__(self):
-        super().__init__("跳过", "跳过当前回合的抽牌阶段")
+        super().__init__("➡跳过", "跳过当前回合的抽牌阶段")
 
     def use(self, game, player, target):
-        game.gui.print(f"⏭️ {player.name} 跳过了回合")
+        game.gui.print(f"➡ {player.name} 跳过了回合")
         game.end_turn = True
+
+class SuperSkipCard(Card):
+    """超级跳过卡"""
+
+    def __init__(self):
+        super().__init__("⏭️超级跳过", "跳过剩余所有回合的抽牌阶段")
+
+    def use(self, game, player, target):
+        game.gui.print(f"⏭️ {player.name} 跳过了剩余所有回合")
+        game.end_turn = True
+        game.all_end = True
 
 class ShuffleCard(Card):
     """洗牌卡"""
 
     def __init__(self):
-        super().__init__("洗牌", "重新洗牌整个牌堆")
+        super().__init__("🔀洗牌", "重新洗牌整个牌堆")
 
     def use(self, game, player, target):
-        game.gui.print("🃏 牌堆被重新洗牌！")
+        game.gui.print("🔀 牌堆被重新洗牌！")
         game.deck.shuffle()
         game.ai_known = ["unknown"] * len(game.deck.cards)  # 洗牌后 AI 对所有牌的信息全部失效
 
@@ -88,7 +115,7 @@ class SwapCard(Card):
     """顶底互换卡"""
 
     def __init__(self):
-        super().__init__("顶底互换", "交换牌堆顶部和底部的牌")
+        super().__init__("🔄顶底互换", "交换牌堆顶部和底部的牌")
 
     def use(self, game, player, target):
         if len(game.deck.cards) > 1:
@@ -102,7 +129,7 @@ class DrawBottomCard(Card):
     """抽底卡"""
 
     def __init__(self):
-        super().__init__("抽底", "抽取牌堆底部的牌而不是顶部")
+        super().__init__("⬇抽底", "抽取牌堆底部的牌而不是顶部")
 
     def use(self, game, player, target):
         game.gui.print(f"👇 {player.name} 从牌堆底部抽牌")
@@ -112,7 +139,7 @@ class SeeFutureCard(Card):
     """预见未来卡"""
 
     def __init__(self):
-        super().__init__("预见未来", "查看牌堆顶的3张牌")
+        super().__init__("👁预见未来", "查看牌堆顶的3张牌")
 
     def use(self, game, player, target):
         top_count = min(len(game.deck.cards), 3)
@@ -140,8 +167,9 @@ class AlterFutureCard(Card):
     """改变未来卡"""
 
     def __init__(self):
-        super().__init__("改变未来", "查看并排序牌堆顶的3张牌")
+        super().__init__("🔄改变未来", "查看并排序牌堆顶的3张牌")
 
+    # noinspection SpellCheckingInspection
     def use(self, game, player, target):
         top_count = min(len(game.deck.cards), 3)
         top_cards = list(reversed(game.deck.cards[-top_count:]))  # 反转顺序
@@ -160,50 +188,97 @@ class AlterFutureCard(Card):
                         top_cards[bomb_idx], top_cards[-2] = top_cards[-2], top_cards[bomb_idx]
                     else:  # 如果下回合还是 AI，则放在最后一张
                         top_cards[bomb_idx], top_cards[-1] = top_cards[-1], top_cards[bomb_idx]
-                    game.gui.print("🤖 AI重新排列了牌堆顶的牌")
+                    game.gui.print("🤖 AI 重新排列了牌堆顶的牌")
 
             # 将排序后的牌放回牌堆
             for card in top_cards:  # 倒序添加以保持原先的顺序
                 game.deck.cards.append(card)
             game.ai_known.extend(top_cards)  # AI 知道新顺序，直接写入 card 对象
 
-        # 玩家逻辑：使用tkinter对话框让玩家重新排序卡牌
+        # 玩家逻辑：使用可视化拖拽界面让玩家重新排序卡牌
         else:
-            # 创建卡牌列表和对话框
-            cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(top_cards)]
-            result = simpledialog.askstring(
-                "重新排序卡牌",
-                f"🔁 请输入新的顺序（{', '.join(cards_info)}）\n🔢 输入数字序列，用空格分隔（例如：3 1 2）：",
-                parent=game.gui.root  # 设置出牌菜单为主窗口
-            )
+            # 创建卡牌选择对话框
+            dialog = tk.Toplevel(game.gui.root)
+            dialog.title("重新排序卡牌")
+            dialog.geometry("400x300")
+            dialog.transient(game.gui.root)
+            dialog.grab_set()
 
-            try:
-                if result:
-                    order = result.strip().split()
-                    if len(order) != top_count:
-                        messagebox.showwarning("无效输入", f"请输入{top_count}个数字")
-                        order = [str(i+1) for i in range(top_count)]  # 默认顺序
+            # 在主窗口上居中显示对话框
+            x = game.gui.root.winfo_x() + game.gui.root.winfo_width() // 2 - 200
+            y = game.gui.root.winfo_y() + game.gui.root.winfo_height() // 2 - 150
+            dialog.geometry(f"+{x}+{y}")
 
-                    indices = [int(x) - 1 for x in order]
-                    if any(i < 0 or i >= top_count for i in indices) or len(set(indices)) != top_count:
-                        messagebox.showwarning("无效输入", "输入的数字无效")
-                        indices = list(range(top_count))  # 默认顺序
+            tk.Label(dialog, text="🔄 点击两张卡牌互换其位置（顺序为从上到下）：").pack(pady=10)
 
-                    # 根据玩家的输入重新排序
-                    reordered = [top_cards[i] for i in indices]
+            # 创建卡牌框架
+            cards_frame = tk.Frame(dialog)
+            cards_frame.grid_columnconfigure(0, weight=1)
+            cards_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+            # 卡牌按钮和顺序
+            card_btns = []
+            selected_index = [None]  # 使用列表存储选中的索引，便于在函数间共享
+
+            # 更新卡牌显示顺序
+            def update_card_display():
+                for i, _btn in enumerate(card_btns):
+                    _btn.config(text=f"{i + 1}. {top_cards[i].name}")
+                    _btn.grid(row=i, column=0, sticky="ewns", pady=2)
+
+            # 点击卡牌处理
+            def on_card_click(index):
+                first_idx = selected_index[0] if selected_index[0] is not None else index
+                if selected_index[0] is None:
+                    # 选择第一张卡
+                    selected_index[0] = index
+                    card_btns[index].config(bg="lightblue")
                 else:
-                    # 用户取消，保持原顺序
-                    reordered = top_cards
-            except (ValueError, IndexError):
-                messagebox.showwarning("输入错误", "格式错误，使用原始顺序")
-                reordered = top_cards
+                    # 交换两张卡
+                    top_cards[first_idx], top_cards[index] = top_cards[index], top_cards[first_idx]
+                    card_btns[first_idx].config(bg="SystemButtonFace")
+                    selected_index[0] = None
+                    update_card_display()
+
+            # 创建卡牌按钮
+            for i in range(top_count):
+                btn = tk.Button(cards_frame,
+                                text=f"{i + 1}. {top_cards[i].name}",
+                                width=30, height=2,
+                                anchor="center", justify="center",
+                                command=lambda idx=i: on_card_click(idx))
+                btn.grid(row=i, column=0, sticky="ew", pady=2)
+                card_btns.append(btn)
+
+            result_var = tk.BooleanVar(value=False)
+
+            def on_confirm():
+                result_var.set(True)
+                dialog.destroy()
+
+            def on_cancel():
+                # 恢复原始顺序
+                top_cards[:] = list(reversed(game.deck.cards[-top_count:]))
+                dialog.destroy()
+
+            # 按钮框架
+            btn_frame = tk.Frame(dialog)
+            btn_frame.pack(fill="x", pady=10)
+
+            tk.Button(btn_frame, text="确认", command=on_confirm).pack(side="left", padx=20, expand=True)
+            tk.Button(btn_frame, text="取消", command=on_cancel).pack(side="right", padx=20, expand=True)
+
+            # 等待对话框关闭
+            dialog.wait_window()
+
+            # 显示最终顺序
+            if result_var.get():
+                game.gui.print("🔽 现在牌堆顶的牌（从上到下）:")
+                for i, card in enumerate(top_cards):
+                    game.gui.print(f"{i + 1}. {card.name}")
 
             # 将排序后的牌放回牌堆
-            game.gui.print("🔽 现在牌堆顶的牌（从上到下）:")
-            cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(reordered)]
-            for info in cards_info:
-                game.gui.print(info)
-            for card in reversed(reordered):
+            for card in reversed(top_cards):
                 game.deck.cards.append(card)
 
             # 更新 AI 已知信息
