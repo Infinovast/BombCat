@@ -1,7 +1,7 @@
 # BombCat
 
 <p align="center">
-  <img src="Header.png" alt="title-pic">
+  <img src="https://github.com/Infinovast/BombCat/blob/main/Pic/Header.png" alt="title-pic">
 </p>
 
 A simple man-machine battle game inspired by Exploring Kittens.
@@ -10,7 +10,7 @@ _The current version of the game is relatively simple, but please look forward t
 
 Running in the GUI:
 
-![2](https://github.com/user-attachments/assets/27ee727a-5be5-43b4-adee-7beca396f5b7)
+![2](https://github.com/Infinovast/BombCat/blob/main/Pic/0510.png)
 
 Or on the console (v1.1.0): 
 
