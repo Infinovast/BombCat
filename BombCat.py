@@ -224,7 +224,7 @@ class AlterFutureCard(Card):
             def update_card_display():
                 for i, _btn in enumerate(card_btns):
                     _btn.config(text=f"{i + 1}. {top_cards[i].name}")
-                    _btn.grid(row=i, column=0, sticky="ewns", pady=2)
+                    _btn.grid(row=i, column=0, sticky="ew", pady=2)
 
             # 点击卡牌处理
             def on_card_click(index):
