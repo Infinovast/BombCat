@@ -4,7 +4,7 @@
   <img src="https://github.com/Infinovast/BombCat/blob/main/Pic/Header.png" alt="title-pic">
 </p>
 
-A simple man-machine battle game inspired by Exploring Kittens.
+A simple man-machine battle game inspired by _Exploding Kittens_.
 
 _The current version of the game is relatively simple, but please look forward to adding English, GUI(finished) and LAN online battles in the future! :)_
 
