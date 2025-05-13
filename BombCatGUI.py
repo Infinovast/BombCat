@@ -1,12 +1,10 @@
 """
 BombCatGUI
-爆炸猫游戏的图形界面实现
+炸弹猫游戏的图形界面实现
 """
 import random
 from ctypes import windll
 from tkinter import ttk, messagebox, simpledialog
-from typing import Literal
-
 from BombCat import *
 
 
@@ -79,6 +77,7 @@ class Player:
         self.name = name
         self.hand = []
         self.hand_limit = 9  # 设置手牌上限
+        self.init_limit = 6  # 设置初始手牌上限
         self.is_ai = is_ai
         self.alive = True
 
@@ -125,7 +124,7 @@ class Game:
         """初始化双方手牌"""
         for p in [self.player, self.ai]:
             p.hand.append(DefuseCard())  # 强制加入一张拆除卡
-            p.hand.extend(self.deck.draw(5, refuse=[BombCatCard()]))  # 再抽5张牌
+            p.hand.extend(self.deck.draw(p.init_limit - 1 , refuse=[BombCatCard()]))  # 再抽5张牌 6-1=5
 
     def ai_control(self):
         """
@@ -399,13 +398,14 @@ class GUI:
     def __init__(self, _root, debug_mode=False):
         # 设置窗口属性
         self.root = _root
-
-        # 界面变量
-        self.player_cards_var = None
-        self.ai_cards_var = None
-        self.player_cards = None
+        self.debug_mode = debug_mode
 
         # UI组件
+        self.player_cards = None  # 手牌文字所在的Label，是Label对象
+        self.ai_cards = None
+        self.player_cards_var = None  # 手牌文字，是字符串
+        self.ai_cards_var = None
+
         self.turn_label = None
         self.deck_label = None
         self.bomb_label = None
@@ -424,10 +424,19 @@ class GUI:
         self.init_window()
 
         # 游戏引用
-        self.debug_mode = debug_mode
         self.game = Game(gui=self)
         windll.user32.ShowWindow(windll.kernel32.GetConsoleWindow(), self.debug_mode)  # 根据 debug_mode 决定是否隐藏命令行窗口
-        self.print("[🐱 BombCat 炸弹猫]\n欢迎来到 BombCat！\n")
+
+        # 欢迎文字
+        welcome_text = (f"[🐱 BombCat 炸弹猫]\n欢迎来到 BombCat！\n\n"
+                        f"规则：\n1. 👤玩家 和 🤖AI 各有{Player('').init_limit}张初始手牌，手牌上限为{Player('').hand_limit}张；\n"
+                        f"2. 在你的回合可以任意 出牌，而 🃏抽牌 会结束回合；\n"
+                        f"3. 回合交替进行，直到抽到 💣炸弹猫 且无 🛠拆除 的一方游戏失败。\n\n"
+                        f"说明：\n1. 任何时候左键单击 [开始游戏] 都可以重开游戏。特别地，💻Debug 模式下右键单击可以快速重开游戏；\n"
+                        f"2. 任何时候右键单击 [退出游戏] 都可以开关 💻Debug 模式，此模式下可以便捷地查看 AI 手牌、抽牌信息等；\n"
+                        f"3. 请仔细观察游戏日志栏周围的 UI，它们会帮助你快速上手游戏；\n"
+                        f"4. 程序作者保留所有权利。\n\n")
+        self.print(welcome_text, scroll='1.0')
 
     def set_game(self, game):
         """设置游戏引用"""
@@ -435,7 +444,7 @@ class GUI:
         self.game = game
         self.update_gui()
 
-    def print(self, message, debug=False):
+    def print(self, message, debug=False, scroll='end'):
         """输出到日志栏"""
         # 如果不是调试模式，则不输出调试信息
         if debug and not self.debug_mode:
@@ -449,67 +458,8 @@ class GUI:
             self.log_text.config(state="normal")
             self.log_text.tag_configure("center", justify="center")  # 定义居中标签
             self.log_text.insert("end", message + "\n", "center")  # 应用居中标签
-            self.log_text.see("end")
+            self.log_text.see(scroll)
             self.log_text.config(state="disabled")
-
-    def start_game(self):
-        """启动新游戏/重新启动游戏"""
-        if self.game.game_running:
-            if messagebox.askyesno("确认", "游戏正在进行，是否重新开始？"):
-                self.game = Game(gui=self)  # 初始化，但不重新创建GUI
-            else:
-                return
-        elif not self.game.ai.alive or not self.game.player.alive:
-            self.game = Game(gui=self)
-
-        self.game.game_running = True  # 游戏这时才开始
-
-        # 清空日志
-        self.log_text.config(state="normal")
-        self.log_text.delete("1.0", tk.END)
-        self.log_text.config(state="disabled")
-
-        # 启用玩家操作按钮
-        self.draw_button.config(state=tk.NORMAL)
-        self.play_button.config(state=tk.NORMAL)
-        # self.start_button.config(state=tk.DISABLED)
-
-        # 更新初始界面
-        self.print("[🐱 BombCat 炸弹猫]\n游戏开始！\n\n────────── 👤 玩家回合 ──────────\n🧠 玩家 正在思考...")
-        self.update_gui()
-
-    def update_gui(self):
-        """更新所有显示"""
-        if not self.game:
-            return
-
-        # 更新玩家手牌
-        hand_text = ""
-        for idx, card in enumerate(self.game.player.hand):
-            hand_text += f"{idx + 1}. {card.name}  "
-        self.player_cards_var.set(hand_text)
-
-        # 更新AI手牌数量
-        self.ai_cards_var.set(f"数量: {len(self.game.ai.hand)}张")
-
-        # 更新游戏状态区的标签
-        current = "玩家" if self.game.current_player == self.game.player else "AI"
-        color = "blue" if self.game.current_player == self.game.player else "black"  # 红色字体表示玩家回合
-        self.turn_label.config(foreground=color, text=f"当前回合: {current} (剩余{self.game.remaining_turns}回合)")
-        self.deck_label.config(text=f"牌堆剩余: {len(self.game.deck.cards)}张")
-
-        bomb_prob = self.game.deck.amounts[BombCatCard] / len(self.game.deck.cards)
-        color = "darkred" if bomb_prob > 0.5 else "red" if bomb_prob > 0.4 else "orange" if bomb_prob > 0.3 else "green"
-        self.bomb_label.config(foreground=color, text=f"💣 {bomb_prob if bomb_prob <= 1 else 1:.1%}")
-
-        self.mode_label.config(text=f"游戏模式: {'Debug' if self.debug_mode else '正常'}")
-        player_status = "存活" if self.game.player.alive else "死亡"
-        ai_status = "存活" if self.game.ai.alive else "死亡"
-
-        self.player_status.config(text=f"玩家状态: {player_status}")
-        self.ai_status.config(text=f"AI状态: {ai_status}")
-
-        self.root.update()
 
     # noinspection SpellCheckingInspection
     def init_window(self):
@@ -558,19 +508,23 @@ class GUI:
         hands = ttk.Frame(main)
         hands.pack(fill="x", pady=5)
 
-        # 玩家和AI手牌
-        for side, name, is_player in [("left", "玩家", True), ("right", "AI", False)]:
-            side: Literal["left", "right", "top", "bottom"]  # 明确类型
-            frame = ttk.LabelFrame(hands, text=f"{name}手牌", padding="5")
-            frame.pack(side=side, fill="both", expand=True)
+        # 玩家手牌
+        frame = ttk.LabelFrame(hands, text=f"玩家手牌", padding="5")
+        frame.pack(side="left", fill="both", expand=True)
+        setattr(self, "player_cards_var", tk.StringVar())
+        self.player_cards = ttk.Label(frame, textvariable=self.player_cards_var)
+        self.player_cards.configure(
+            wraplength=650 if not self.debug_mode else window_width // 2)  # 规定玩家手牌区文字的强制换行长度
+        self.player_cards.pack(fill="both", expand=True)
 
-            var_name = f"{'player' if is_player else 'ai'}_cards_var"
-            setattr(self, var_name, tk.StringVar())
-            label = ttk.Label(frame, textvariable=getattr(self, var_name))
-            if is_player:
-                self.player_cards = label
-                label.configure(wraplength=650)
-            label.pack(fill="both", expand=True)
+        # AI手牌
+        frame = ttk.LabelFrame(hands, text=f"AI手牌", padding="5")
+        frame.pack(side="right", fill="both", expand=True)
+        setattr(self, "ai_cards_var", tk.StringVar())
+        self.ai_cards = ttk.Label(frame, textvariable=self.ai_cards_var)
+        if self.debug_mode:
+            self.ai_cards.configure(wraplength=0 if not self.debug_mode else window_width // 2)
+        self.ai_cards.pack(fill="both", expand=True)
 
         # 按钮区域
         actions = ttk.Frame(main)
@@ -591,7 +545,81 @@ class GUI:
                 setattr(self, attr, btn)
                 btn.pack(side="left", padx=5, expand=True)
 
-        self.quit_button.bind('<Button-3>', lambda e: self.toggle_debug_mode())  # 绑定右键单击为切换调试模式
+        def restart_game(event):
+            """重启游戏"""
+            if self.debug_mode:
+                self.start_game(no_ask=True)
+            else:
+                messagebox.showinfo("提示", f"调试模式下才能快速重启游戏！（右键 [退出游戏] 开关调试模式）")
+            return event
+        self.start_button.bind('<Button-3>', restart_game)  # 绑定右键单击开始键为重开游戏（仅在debug模式下有效）
+        self.quit_button.bind('<Button-3>', lambda e: self.toggle_debug_mode())  # 绑定右键单击退出键为切换调试模式
+
+    def update_gui(self):
+        """更新所有显示"""
+        if not self.game:
+            return
+
+        # 更新玩家和AI手牌
+        self.player_cards.configure(wraplength=680 if not self.debug_mode else 400)  # 规定玩家手牌区文字的强制换行长度 800//2=400
+        self.ai_cards.configure(wraplength=0 if not self.debug_mode else 350)  # 规定AI手牌区文字的强制换行长度
+
+        def hand_text(player):
+            """获取手牌文本"""
+            hand_tmp = {c.name: len([x for x in player.hand if type(x) == type(c)]) for c in player.hand}
+            hand_tmp = sorted(hand_tmp.items(), key=lambda item: (0 if item[0] == DefuseCard().name else 1, item[0]))
+            text = ""
+            for name, amt in hand_tmp:
+                text += f"{name} ×{amt} | "
+            return text[:-3]  # 去掉最后的[-3~-1] " | "
+
+        self.player_cards_var.set(f"数量: {len(self.game.player.hand)}张\n{hand_text(self.game.player)}")
+        self.ai_cards_var.set(f"数量: {len(self.game.ai.hand)}张{'\n'+hand_text(self.game.ai) if self.debug_mode else ""}")
+
+        # 更新游戏状态区的标签
+        current = "玩家" if self.game.current_player == self.game.player else "AI"
+        color = "blue" if self.game.current_player == self.game.player else "black"  # 红色字体表示玩家回合
+        self.turn_label.config(foreground=color, text=f"当前回合: {current} (剩余{self.game.remaining_turns}回合)")
+        self.deck_label.config(text=f"牌堆剩余: {len(self.game.deck.cards)}张")
+
+        bomb_prob = self.game.deck.amounts[BombCatCard] / len(self.game.deck.cards)
+        color = "darkred" if bomb_prob > 0.5 else "red" if bomb_prob > 0.4 else "orange" if bomb_prob > 0.3 else "green"
+        self.bomb_label.config(foreground=color, text=f"💣 {bomb_prob if bomb_prob <= 1 else 1:.1%}")
+
+        self.mode_label.config(text=f"游戏模式: {'Debug' if self.debug_mode else '正常'}")
+        player_status = "存活" if self.game.player.alive else "死亡"
+        ai_status = "存活" if self.game.ai.alive else "死亡"
+
+        self.player_status.config(text=f"玩家状态: {player_status}")
+        self.ai_status.config(text=f"AI状态: {ai_status}")
+
+        self.root.update()
+
+    def start_game(self, no_ask=False):
+        """启动新游戏/重新启动游戏"""
+        if self.game.game_running:
+            if no_ask or messagebox.askyesno("确认", "游戏正在进行，是否重新开始？"):
+                self.game = Game(gui=self)  # 初始化，但不重新创建GUI
+            else:
+                return
+        elif not self.game.ai.alive or not self.game.player.alive:
+            self.game = Game(gui=self)
+
+        self.game.game_running = True  # 游戏这时才开始
+
+        # 清空日志
+        self.log_text.config(state="normal")
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.config(state="disabled")
+
+        # 启用玩家操作按钮
+        self.draw_button.config(state=tk.NORMAL)
+        self.play_button.config(state=tk.NORMAL)
+        # self.start_button.config(state=tk.DISABLED)
+
+        # 更新初始界面
+        self.print("[🐱 BombCat 炸弹猫]\n游戏开始！\n\n────────── 👤 玩家回合 ──────────\n🧠 玩家 正在思考...")
+        self.update_gui()
 
     def player_draw(self):
         """处理玩家抽牌"""
@@ -675,6 +703,7 @@ class GUI:
             self.debug_mode = not self.debug_mode
         self.update_gui()
         windll.user32.ShowWindow(windll.kernel32.GetConsoleWindow(), self.debug_mode)  # 根据 debug_mode 决定是否隐藏命令行窗口
+        print(f"💻 Debug模式{'开启' if self.debug_mode else '关闭'}")
         messagebox.showinfo("Debug模式", f"💻 Debug模式{'开启' if self.debug_mode else '关闭'}")
 
     def prompt_bomb_position(self, max_pos):
