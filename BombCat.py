@@ -132,11 +132,12 @@ class DrawBottomCard(Card):
 class SeeFutureCard(Card):
     """预见未来卡"""
 
-    def __init__(self):
-        super().__init__("👁预见未来", "查看牌堆顶的3张牌")
+    def __init__(self, depth=3):
+        super().__init__(f"👁预见未来{'-' + str(depth) if depth == 5 else ''}", f"查看牌堆顶的{depth}张牌")
+        self.depth = depth
 
     def use(self, game, player, target):
-        top_count = min(len(game.deck.cards), 3)
+        top_count = min(len(game.deck.cards), self.depth)
         if top_count == 0:
             game.gui.print(f"😮 牌堆里没有牌了！")
             return
@@ -160,19 +161,20 @@ class SeeFutureCard(Card):
 class AlterFutureCard(Card):
     """改变未来卡"""
 
-    def __init__(self):
-        super().__init__("🔄改变未来", "查看并排序牌堆顶的3张牌")
+    def __init__(self, depth=3):
+        super().__init__(f"🔄改变未来{'-' + str(depth) if depth == 5 else ''}", f"查看并排序牌堆顶的{depth}张牌")
+        self.depth = depth
 
     # noinspection SpellCheckingInspection
     def use(self, game, player, target):
-        top_count = min(len(game.deck.cards), 3)
+        top_count = min(len(game.deck.cards), self.depth)  # 实际上看几张牌
         top_cards = list(reversed(game.deck.cards[-top_count:]))  # 反转顺序
         game.deck.cards = game.deck.cards[:-top_count]  # 移除这些牌
         del game.ai_known[-top_count:]  # 同步删除 ai_known 顶部 top_count 条目
 
         game.gui.print(f"🔄 {player.name} 正在重新排列牌堆顶的{top_count}张牌")
 
-        # AI逻辑：将爆炸猫（如果有）放在第2张位置
+        # AI逻辑：将爆炸猫（如果有）放在第2张位置给玩家
         if player.is_ai:
             bomb_cats = [i for i, card in enumerate(top_cards) if isinstance(card, BombCatCard)]
             if bomb_cats and top_count > 1:
@@ -189,12 +191,12 @@ class AlterFutureCard(Card):
                 game.deck.cards.append(card)
             game.ai_known.extend(top_cards)  # AI 知道新顺序，直接写入 card 对象
 
-        # 玩家逻辑：使用可视化拖拽界面让玩家重新排序卡牌
+        # 玩家逻辑：用点击界面让玩家重新排序卡牌
         else:
             # 创建卡牌选择对话框
             dialog = tk.Toplevel(game.gui.root)
             dialog.title("重新排序卡牌")
-            dialog.geometry("400x300")
+            dialog.geometry(f"300x{300 if self.depth == 3 else 400}")  # 根据看3张还是5张决定菜单高度
             dialog.transient(game.gui.root)
             dialog.grab_set()
 
@@ -277,3 +279,7 @@ class AlterFutureCard(Card):
 
             # 更新 AI 已知信息
             game.ai_known.extend(["unknown"] * top_count)  # 玩家重排后，AI 不知道新顺序
+
+if __name__ == "__main__":
+    import BombCatGUI
+    BombCatGUI.main()
