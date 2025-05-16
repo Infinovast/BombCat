@@ -30,8 +30,10 @@ class Deck:
             *[SkipCard() for _ in range(self.amounts[SkipCard])],  # 跳过卡
             *[SuperSkipCard() for _ in range(self.amounts[SkipCard])],  # 超级跳过卡
             *[ShuffleCard() for _ in range(self.amounts[ShuffleCard])],  # 洗牌卡
-            *[SeeFutureCard() for _ in range(self.amounts[SeeFutureCard])],  # 预见未来卡
-            *[AlterFutureCard() for _ in range(self.amounts[AlterFutureCard])],  # 改变未来卡
+            *[SeeFutureCard(depth=random.choices([3, 5], weights=[4, 1])[0])
+                  for _ in range(self.amounts[SeeFutureCard])],  # 预见未来卡
+            *[AlterFutureCard(depth=random.choices([3, 5], weights=[4, 1])[0])
+                  for _ in range(self.amounts[AlterFutureCard])],  # 改变未来卡
             *[DrawBottomCard() for _ in range(self.amounts[DrawBottomCard])],  # 抽底卡
             *[SwapCard() for _ in range(self.amounts[SwapCard])],  # 顶底互换卡
         ]
@@ -96,6 +98,14 @@ class Player:
         else:
             return [c for c in self.hand if isinstance(c, card_type)] if isinstance(card_type, (type, tuple)) else []
 
+    def hand_text(self):
+        """获取手牌文本"""
+        hand_tmp = {c.name: len([x for x in self.hand if type(x) == type(c)]) for c in self.hand}
+        hand_tmp = sorted(hand_tmp.items(), key=lambda item: (0 if item[0] == DefuseCard().name else 1, item[0]))
+        text = ""
+        for name, amt in hand_tmp:
+            text += f"{name} ×{amt} | "
+        return text[:-3]  # 去掉最后的[-3~-1] " | "
 
 class Game:
     """游戏控制器"""
@@ -564,17 +574,8 @@ class GUI:
         self.player_cards.configure(wraplength=680 if not self.debug_mode else 400)  # 规定玩家手牌区文字的强制换行长度 800//2=400
         self.ai_cards.configure(wraplength=0 if not self.debug_mode else 350)  # 规定AI手牌区文字的强制换行长度
 
-        def hand_text(player):
-            """获取手牌文本"""
-            hand_tmp = {c.name: len([x for x in player.hand if type(x) == type(c)]) for c in player.hand}
-            hand_tmp = sorted(hand_tmp.items(), key=lambda item: (0 if item[0] == DefuseCard().name else 1, item[0]))
-            text = ""
-            for name, amt in hand_tmp:
-                text += f"{name} ×{amt} | "
-            return text[:-3]  # 去掉最后的[-3~-1] " | "
-
-        self.player_cards_var.set(f"数量: {len(self.game.player.hand)}张\n{hand_text(self.game.player)}")
-        self.ai_cards_var.set(f"数量: {len(self.game.ai.hand)}张{'\n'+hand_text(self.game.ai) if self.debug_mode else ""}")
+        self.player_cards_var.set(f"数量: {len(self.game.player.hand)}张\n{self.game.player.hand_text()}")
+        self.ai_cards_var.set(f"数量: {len(self.game.ai.hand)}张{'\n'+self.game.ai.hand_text() if self.debug_mode else ""}")
 
         # 更新游戏状态区的标签
         current = "玩家" if self.game.current_player == self.game.player else "AI"
@@ -759,7 +760,11 @@ class GUI:
             self.root.destroy()
 
 
-if __name__ == "__main__":
+def main():
+    """主函数"""
     root = tk.Tk()
     GUI(root, debug_mode=False)
     root.mainloop()
+
+if __name__ == "__main__":
+    main()
