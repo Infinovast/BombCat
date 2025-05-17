@@ -65,32 +65,39 @@ class AttackCard(Card):
 
     def use(self, game, player, target):
         game.gui.print(f"🔥 {player.name} 发动攻击！{target.name} 将要连续行动 {game.remaining_turns + 1} 回合")
-        game.remaining_turns += 2  # 在当前回合基础上加2个回合，因为原有的回合会在handle_turn结束后减掉
+        game.remaining_turns += 2  # 实际是在当前回合上1个回合，因为原有回合会在handle_turn结束后减掉
         game.current_player = target
         game.end_turn = True  # 注意：不能用all_end！攻击是转移回合给对手，而不是清空回合再轮到对手
-        
-        # # 如果目标是AI，则立即调度AI回合
-        # if target.is_ai and game.gui:
-        #     game.gui.schedule_ai_turn()
+
+class PersonalAttackCard(Card):
+    """个人攻击卡"""
+
+    def __init__(self):
+        super().__init__("👋自我攻击", "让自己增加2个回合")
+
+    def use(self, game, player, target):
+        game.gui.print(f"🔥 {player.name} 发动自我攻击，将连续行动 {game.remaining_turns + 2} 回合")
+        game.remaining_turns += 3  # 实际是在当前回合上加2个回合，因为原有回合会在handle_turn结束后减掉
+        game.end_turn = True  # 注意：不能用all_end！攻击是转移回合给对手，而不是清空回合再轮到对手
 
 class SkipCard(Card):
     """跳过卡"""
 
     def __init__(self):
-        super().__init__("➡跳过", "跳过当前回合的抽牌阶段")
+        super().__init__("⏭️跳过", "跳过当前回合的抽牌阶段")
 
     def use(self, game, player, target):
-        game.gui.print(f"➡ {player.name} 跳过了回合")
+        game.gui.print(f"⏭️ {player.name} 跳过了回合")
         game.end_turn = True
 
 class SuperSkipCard(Card):
     """超级跳过卡"""
 
     def __init__(self):
-        super().__init__("⏭️超级跳过", "跳过剩余所有回合的抽牌阶段")
+        super().__init__("🚀超级跳过", "跳过剩余所有回合的抽牌阶段")
 
     def use(self, game, player, target):
-        game.gui.print(f"⏭️ {player.name} 跳过了剩余所有回合")
+        game.gui.print(f"🚀 {player.name} 跳过了剩余所有回合")
         game.end_turn = True
         game.all_end = True
 
