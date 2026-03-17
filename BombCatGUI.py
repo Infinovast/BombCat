@@ -2,9 +2,9 @@
 BombCatGUI
 炸弹猫游戏的图形界面实现
 """
-import threading
 import queue
 import random
+import re
 from ctypes import windll
 from tkinter import ttk, messagebox, simpledialog
 from BombCat import *
@@ -132,7 +132,9 @@ class Game:
         self.end_turn = False
         self.end_all_turn = False
         self.game_running = False  # Game初始化的时候游戏未开始，在start_game()中才设置为True
-        self.player_turn_done = False  # 玩家回合结束标志，用于在_next_turn()阻塞主线程
+        self.turn_owner = self.current_player
+        self.turn_progress = 1
+        self.turn_total = self.remaining_turns
 
         self.ai_known = ["unknown"] * len(self.deck.cards)  # AI 对牌堆每张牌的认知：Card 实例 或 "unknown"
         self.noped = None  # =None 无人被Nope | self.player 对玩家生效 | self.ai 对AI生效
@@ -194,13 +196,13 @@ class Game:
             if defuse_pos[-1] == top_idx:
                 if len(self.ai.hand) < self.ai.hand_limit:
                     return 'draw', None
-            # 拆除卡在底，优先出“抽底卡”再抽
+            # 拆除卡在底，优先出"抽底卡"再抽
             if defuse_pos[0] == bottom_idx:
                 if db:
                     return 'play', db
                 if sw:
                     return 'play', sw
-            # 否则尝试用“顶底互换”将目标拉到可抽位置
+            # 否则尝试用"顶底互换"将目标拉到可抽位置
             if sw:
                 return 'play', sw
             # 最后才抽牌
@@ -280,7 +282,7 @@ class Game:
             if self.end_turn or self.end_all_turn:
                 # 如果是玩家回合，打开回合结束标记，结束阻塞循环
                 if not player.is_ai:
-                    self.gui.player_turn_done = True
+                    self.player_turn_done = True
                 self._next_turn()  # 出牌部分的回合结束
 
             elif not (isinstance(card, NopeCard) and player.is_ai):
@@ -310,7 +312,10 @@ class Game:
 
             card = drawn[0]
             if isinstance(card, BombCatCard):
-                self._handle_bomb_cat(player, card)  # all_end的逻辑在函数内
+                # 炸弹流程内部会自行结束回合或结束游戏，避免在此重复推进回合
+                self._handle_bomb_cat(player, card)
+                self.gui.update_gui()
+                return True
             else:
                 player.hand.append(card)
                 if player.is_ai and not self.gui.debug_mode:
@@ -375,15 +380,7 @@ class Game:
 
     def _next_turn(self):
         """结束回合，启动下一个回合"""
-        # 玩家回合结束标志打开前一直阻塞主线程
-        if not self.current_player.is_ai:
-            while not self.player_turn_done:
-                pass
-        # 关闭玩家回合结束标志，直到抽牌或出牌把它打开
-        self.player_turn_done = False
-        # 抽牌的self.player_turn_done = True在gui.player_draw()
-        # 出牌的self.player_turn_done = True在game.play_card()中的if not player.is_ai
-
+        prev_player = self.current_player
         self.end_turn = False
         # 抽到炸弹猫拆掉/打出SuperSkip 等，结束所有回合
         if self.end_all_turn:
@@ -398,7 +395,9 @@ class Game:
             self.remaining_turns = 1
             self.current_player = self.get_other(self.current_player)
 
-        # 先检查游戏是否已经结束！游戏已结束但多输出“─👤玩家回合─”的问题在这
+        self._advance_turn_counter(switched_player=(self.current_player != prev_player))
+
+        # 先检查游戏是否已经结束！游戏已结束但多输出"─👤玩家回合─"的问题在这
         self.check_game_end()
         self.gui.update_gui()
 
@@ -410,12 +409,39 @@ class Game:
             if self.current_player.is_ai:
                 self.gui.draw_button.config(state=tk.DISABLED)  # 这两个按钮在schedule_player_turn再中启用
                 self.gui.play_button.config(state=tk.DISABLED)
-                self.gui.print("\n────────── 🤖 AI回合 ──────────\n💡 AI 正在思考...")
+                self.gui.print(f"\n────────── 🤖 AI回合 {self.get_turn_counter_text()} ──────────\n💡 AI 正在思考...")
                 self.gui.schedule_ai_turn()  # 唯一接入点！
             else:
-                self.gui.print("\n────────── 👤 玩家回合 ──────────\n🧠 请出牌或抽牌...")
+                self.gui.print(f"\n────────── 👤 玩家回合 {self.get_turn_counter_text()} ──────────\n🧠 请出牌或抽牌...")
                 self.gui.draw_button.config(state=tk.NORMAL)
                 self.gui.play_button.config(state=tk.NORMAL)
+
+    def _sync_turn_counter(self):
+        """同步回合计数器，确保回合内加回合时总回合数实时更新"""
+        if self.turn_owner != self.current_player:
+            self.turn_owner = self.current_player
+            self.turn_progress = 1
+            self.turn_total = max(1, self.remaining_turns)
+            return
+
+        self.turn_total = max(self.turn_total, self.remaining_turns, self.turn_progress)
+
+    def _advance_turn_counter(self, switched_player):
+        """在进入新回合时推进回合计数器"""
+        if switched_player or self.turn_owner != self.current_player:
+            self.turn_owner = self.current_player
+            self.turn_progress = 1
+            self.turn_total = max(1, self.remaining_turns)
+        else:
+            self.turn_progress += 1
+            self.turn_total = max(self.turn_total, self.remaining_turns, self.turn_progress)
+
+    def get_turn_counter_text(self):
+        """获取用于标题显示的回合计数文本，格式如 1/3"""
+        self._sync_turn_counter()
+        progress = max(1, self.turn_progress)
+        total = max(progress, self.turn_total)
+        return f"{progress}/{total}"
 
     def check_game_end(self):
         """检查游戏是否结束"""
@@ -452,6 +478,9 @@ class GUI:
         self.player_status = None
         self.ai_status = None
         self.log_text = None
+        self.max_turn_logs = 4
+        self.log_turns = []
+        self.current_turn_log = None
 
         # 按钮
         self.start_button = None
@@ -460,8 +489,8 @@ class GUI:
         self.play_button = None
 
         # 初始化窗口
-        self.window_width = 800
-        self.window_height = 650
+        self.window_width = 700
+        self.window_height = 900
         self.init_window()
 
         # 游戏引用
@@ -470,8 +499,7 @@ class GUI:
 
         # 初始化输出队列，启动线程
         self.print_queue = queue.Queue()
-        self.print_thread = threading.Thread(target=self._process_print_queue, daemon=True)
-        self.print_thread.start()
+        self.root.after(50, self._process_print_queue)
 
         # 欢迎文字
         welcome_text = (f"[🐱 BombCat 炸弹猫]\n欢迎来到 BombCat！\n\n"
@@ -509,52 +537,203 @@ class GUI:
         # self.log_text.config(state="disabled")
 
     def _process_print_queue(self):
-        """独立线程处理输出队列，输出到日志栏"""
-        while True:
-            # 队列为空时get会自动阻塞，实现等待新消息
+        """在主线程轮询输出队列并刷新日志栏"""
+        need_render = False
+        last_scroll = 'end'
+        while not self.print_queue.empty():
             message, debug, scroll, delay = self.print_queue.get()
+            last_scroll = scroll
 
             # 如果开启了调试模式，则同时使用print输出
             if self.debug_mode:
                 print(message)
 
-            # 原print函数核心
             if hasattr(self, 'log_text') and self.log_text:
-                self.log_text.config(state="normal")
-                self.log_text.tag_configure("center", justify="center")  # 定义居中标签
+                if self.debug_mode:
+                    self.log_text.config(state="normal")
+                    self.log_text.tag_configure("center", justify="center")
+                    self.log_text.insert("end", message + "\n", "center")
+                    self.log_text.see(scroll)
+                    self.log_text.config(state="disabled")
+                else:
+                    self._ingest_log_message(message)
+                    need_render = True
 
-                self.log_text.insert("end", message + "\n", "center")  # 应用居中标签
-                self.log_text.see(scroll)
-                self.log_text.config(state="disabled")
-
-                # if '\n' not in message and True:  # 测试！
-                #     self.log_text.insert("end", message + "\n", "center")  # 应用居中标签
-                #     self.log_text.see(scroll)
-                #     self.log_text.config(state="disabled")
-                # else:
-                #     # 如果有换行符，按行分割并保留换行符
-                #     chars = []
-                #     line = ""
-                #     for c in message + '\n':  # 因为print结尾自动换行
-                #         line += c
-                #         if c == '\n':
-                #             chars.append(line)
-                #             line = ""
-                #
-                #     def type_writer(i=0):
-                #         if i < len(chars):
-                #             self.log_text.insert("end", chars[i], "center")
-                #             self.log_text.see(scroll)
-                #             self.log_text.update()
-                #             self.root.after(int(delay * 1000), lambda: type_writer(i + 1))
-                #         else:
-                #             self.log_text.see(scroll)
-                #             self.log_text.config(state="disabled")
-                #
-                #     type_writer()
-
-            # 处理完一条消息
             self.print_queue.task_done()
+
+        if need_render and not self.debug_mode:
+            self._render_structured_logs(scroll=last_scroll)
+
+        # 保持轮询，确保所有UI写操作都在Tk主线程执行
+        self.root.after(50, self._process_print_queue)
+
+    def _configure_log_tags(self):
+        """配置结构化日志样式标签"""
+        self.log_text.tag_configure("turn_sep", foreground="#9AA0A6", justify="center")
+
+        self.log_text.tag_configure("player_header", foreground="#0B5394", background="#E7F1FF", font=("Microsoft YaHei", 12, "bold"))
+        self.log_text.tag_configure("player_block", foreground="#3C78D8", font=("Microsoft YaHei", 11, "bold"))
+        self.log_text.tag_configure("player_body", foreground="#1F3A5F", font=("Microsoft YaHei", 11))
+
+        self.log_text.tag_configure("ai_header", foreground="#7A3E00", background="#FFF3E8", font=("Microsoft YaHei", 12, "bold"))
+        self.log_text.tag_configure("ai_block", foreground="#B45F06", font=("Microsoft YaHei", 11, "bold"))
+        self.log_text.tag_configure("ai_body", foreground="#5B3A29", font=("Microsoft YaHei", 11))
+
+        self.log_text.tag_configure("end_header", foreground="#5A3D00", background="#FFF9D6", font=("Microsoft YaHei", 12, "bold"))
+        self.log_text.tag_configure("end_block", foreground="#7F6000", font=("Microsoft YaHei", 11, "bold"))
+        self.log_text.tag_configure("end_body", foreground="#5A4A14", font=("Microsoft YaHei", 11))
+
+        self.log_text.tag_configure("system_header", foreground="#145A32", background="#EAF7EE", font=("Microsoft YaHei", 12, "bold"))
+        self.log_text.tag_configure("system_block", foreground="#1E8449", font=("Microsoft YaHei", 11, "bold"))
+        self.log_text.tag_configure("system_body", foreground="#1B4332", font=("Microsoft YaHei", 11))
+        self.log_text.tag_configure("system_section", foreground="#0E7A3F", font=("Microsoft YaHei", 11, "bold"))
+
+    @staticmethod
+    def _is_block_separator(line):
+        stripped = line.strip()
+        return bool(stripped) and "/" in stripped and all(c in "─-/" for c in stripped)
+
+    @staticmethod
+    def _parse_turn_header(line):
+        if "玩家回合" in line:
+            return "player", "👤 玩家回合"
+        if "AI回合" in line:
+            return "ai", "🤖 AI回合"
+        if "游戏结束" in line:
+            return "end", "🎮 游戏结束"
+        return None, None
+
+    def _start_turn_log(self, role, title):
+        turn = {
+            "role": role,
+            "title": title,
+            "counter_snapshot": self._get_role_counter_text(role),
+            "blocks": [[]]
+        }
+        self.log_turns.append(turn)
+        self.current_turn_log = turn
+        if len(self.log_turns) > self.max_turn_logs:
+            self.log_turns = self.log_turns[-self.max_turn_logs:]
+
+    def _get_role_counter_text(self, role):
+        if not self.game:
+            return None
+        if role == "player" and self.game.current_player == self.game.player:
+            return self.game.get_turn_counter_text()
+        if role == "ai" and self.game.current_player == self.game.ai:
+            return self.game.get_turn_counter_text()
+        return None
+
+    def _render_turn_title(self, turn):
+        role = turn["role"]
+        title = turn["title"]
+        if role not in ("player", "ai"):
+            return title
+
+        if self.current_turn_log is turn and self.game and self.game.game_running:
+            live_counter = self._get_role_counter_text(role)
+            if live_counter:
+                return f"{title} {live_counter}"
+
+        if turn.get("counter_snapshot"):
+            return f"{title} {turn['counter_snapshot']}"
+        return title
+
+    def _append_log_line(self, line):
+        if not self.current_turn_log:
+            self._start_turn_log("system", "📣 系统消息")
+
+        if not self.current_turn_log["blocks"]:
+            self.current_turn_log["blocks"].append([])
+
+        self.current_turn_log["blocks"][-1].append(line)
+
+    def _start_log_block(self):
+        if not self.current_turn_log:
+            return
+        if not self.current_turn_log["blocks"]:
+            self.current_turn_log["blocks"].append([])
+            return
+        if self.current_turn_log["blocks"][-1]:
+            self.current_turn_log["blocks"].append([])
+
+    def _ingest_log_message(self, message):
+        lines = [line.strip() for line in message.splitlines() if line.strip()]
+        for line in lines:
+            role, title = self._parse_turn_header(line)
+            if role:
+                self._start_turn_log(role, title)
+                continue
+
+            if self._is_block_separator(line):
+                self._start_log_block()
+                continue
+
+            self._append_log_line(line)
+
+    @staticmethod
+    def _clean_card_name(name):
+        # 去掉卡名前面的emoji或符号，仅保留语义文字
+        return re.sub(r"^[^\u4e00-\u9fffA-Za-z0-9]+", "", name).strip()
+
+    def _get_block_title(self, block):
+        if not block:
+            return "常规阶段"
+
+        block_text = "\n".join(block)
+
+        # 规则3：抽炸弹-拆除-放回优先归类为拆弹
+        if ("炸弹猫" in block_text and "使用拆除卡" in block_text and
+                ("将炸弹猫放回" in block_text or "默认将炸弹猫放回" in block_text)):
+            return "拆弹"
+
+
+        # 规则2.5：检测抽牌操作
+        if "抽到了" in block_text or "完成抽牌" in block_text:
+            return "抽牌"
+        # 规则2：有"使用了 某卡牌"时，标题取卡牌名
+        for line in block:
+            if "使用了" in line:
+                name = line.split("使用了", 1)[1].strip()
+                cleaned = self._clean_card_name(name)
+                if cleaned:
+                    return cleaned
+
+        # 规则1：其余都归常规阶段
+        return "常规阶段"
+
+    def _render_structured_logs(self, scroll='end'):
+        self.log_text.config(state="normal")
+        self.log_text.delete("1.0", tk.END)
+
+        visible_turns = self.log_turns[-self.max_turn_logs:]
+        for idx, turn in enumerate(visible_turns):
+            role = turn["role"]
+            self.log_text.insert("end", f"{self._render_turn_title(turn)}\n", f"{role}_header")
+
+            for block in turn["blocks"]:
+                if not block:
+                    continue
+
+                if role == "system" or role == "end":
+                    for content in block:
+                        if content in ("规则：", "说明："):
+                            self.log_text.insert("end", f"  │ {content}\n", "system_section")
+                        else:
+                            self.log_text.insert("end", f"  │ {content}\n", f"{role}_body")
+                    self.log_text.insert("end", "  └────────────────\n", f"{role}_block")
+                else:
+                    block_title = self._get_block_title(block)
+                    self.log_text.insert("end", f"  ├─ {block_title}\n", f"{role}_block")
+                    for content in block:
+                        self.log_text.insert("end", f"  │ {content}\n", f"{role}_body")
+                    self.log_text.insert("end", "  └────────────────\n", f"{role}_block")
+
+            # if idx < len(visible_turns) - 1:
+            #     self.log_text.insert("end", "\n✦──────────────✦\n\n", "turn_sep")
+
+        self.log_text.see(scroll)
+        self.log_text.config(state="disabled")
 
     # noinspection SpellCheckingInspection
     def init_window(self):
@@ -591,11 +770,12 @@ class GUI:
         # 日志区域
         log_frame = ttk.LabelFrame(main_window, text="游戏日志", padding="5")
         log_frame.pack(fill="both", expand=True, pady=5)
-        self.log_text = tk.Text(log_frame, height=10, width=80, wrap="word", font=("Microsoft YaHei", 11))
+        self.log_text = tk.Text(log_frame, height=10, width=80, wrap="word", font=("Microsoft YaHei", 12))
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
         self.log_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set, state="disabled")
+        self._configure_log_tags()
 
         # 手牌区域
         hands = ttk.Frame(main_window)
@@ -677,6 +857,9 @@ class GUI:
         self.player_status.config(text=f"玩家状态: {player_status}")
         self.ai_status.config(text=f"AI状态: {ai_status}")
 
+        if not self.debug_mode and self.current_turn_log:
+            self._render_structured_logs()
+
         self.root.update()
 
     def start_game(self, no_ask=False):
@@ -695,6 +878,8 @@ class GUI:
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", tk.END)
         self.log_text.config(state="disabled")
+        self.log_turns = []
+        self.current_turn_log = None
 
         # 启用玩家操作按钮
         self.draw_button.config(state=tk.NORMAL)
@@ -702,7 +887,7 @@ class GUI:
         # self.start_button.config(state=tk.DISABLED)
 
         # 更新初始界面
-        self.print("[🐱 BombCat 炸弹猫]\n游戏开始！\n\n────────── 👤 玩家回合 ──────────\n🧠 请出牌或抽牌...")
+        self.print(f"[🐱 BombCat 炸弹猫]\n游戏开始！\n\n────────── 👤 玩家回合 {self.game.get_turn_counter_text()} ──────────\n🧠 请出牌或抽牌...")
         self.update_gui()
 
     def player_draw(self):
