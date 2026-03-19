@@ -1,5 +1,4 @@
 """
-BombCat
 炸弹猫游戏卡牌库
 
 新增卡牌步骤：
@@ -9,12 +8,38 @@ BombCat
 """
 import tkinter as tk
 
+
+CARD_INITIAL_SCORES = {
+    "BombCat": -100,
+    "Defuse": 100,
+    "Nope": 32,
+    "Attack": 35,
+    "PersonalAttack": 20,
+    "Skip": 30,
+    "SuperSkip": 50,
+    "Shuffle": 22,
+    "Swap": 18,
+    "DrawBottom": 26,
+    "SeeFuture": {3: 24, 5: 30},
+    "AlterFuture": {3: 28, 5: 36},
+}
+
+
+def get_card_initial_score(card_key, depth=None):
+    score = CARD_INITIAL_SCORES.get(card_key, 0)
+    if isinstance(score, dict):
+        if depth in score:
+            return score[depth]
+        return next(iter(score.values())) if score else 0
+    return score
+
 class Card:
     """卡牌基类"""
 
-    def __init__(self, name, description):
+    def __init__(self, name, description, initial_score=0):
         self.name = name
         self.description = description
+        self.initial_score = initial_score
 
     def use(self, game, player, target):
         """使用卡牌效果，需在子类实现"""
@@ -25,7 +50,7 @@ class BombCatCard(Card):
     """炸弹猫卡"""
 
     def __init__(self):
-        super().__init__("💣炸弹猫", "抽到时必须立即拆除，否则死亡")
+        super().__init__("💣炸弹猫", "抽到时必须立即拆除，否则死亡", initial_score=get_card_initial_score("BombCat"))
 
     def use(self, game, player, target):
         # 实际处理逻辑在抽牌阶段实现
@@ -35,20 +60,17 @@ class DefuseCard(Card):
     """拆除卡"""
 
     def __init__(self):
-        super().__init__("🛠拆除", "拆除炸弹猫并放回牌堆某处")
+        super().__init__("🛠拆除", "拆除炸弹猫并放回牌堆某处", initial_score=get_card_initial_score("Defuse"))
 
     def use(self, game, player, target):
         # 实际处理逻辑在抽牌阶段实现
         pass
 
 class NopeCard(Card):
-    """
-    拒绝卡
-    现在允许在双方回合使用，但后面会改为只在己方回合可用
-    """
+    """拒绝卡"""
 
     def __init__(self):
-        super().__init__("🚫拒绝", "打出后，使对手出的下一张牌失效")
+        super().__init__("🚫拒绝", "对手出的下一张牌失效", initial_score=get_card_initial_score("Nope"))
 
     def use(self, game, player, target):
         if player.is_ai:
@@ -61,7 +83,7 @@ class AttackCard(Card):
     """攻击卡"""
 
     def __init__(self):
-        super().__init__("👊攻击", "让对手执行你的所有回合")
+        super().__init__("👊攻击", "让对手执行你的所有回合", initial_score=get_card_initial_score("Attack"))
 
     def use(self, game, player, target):
         game.gui.print(f"🔥 {player.name} 发动攻击！{target.name} 将要连续行动 {game.remaining_turns + 1} 回合")
@@ -74,7 +96,7 @@ class PersonalAttackCard(Card):
     """自我攻击卡"""
 
     def __init__(self):
-        super().__init__("👋自我攻击", "让自己增加2个回合")
+        super().__init__("👋自我攻击", "让自己增加2个回合", initial_score=get_card_initial_score("PersonalAttack"))
 
     def use(self, game, player, target):
         game.gui.print(f"🔥 {player.name} 发动自我攻击，将连续行动 {game.remaining_turns + 2} 回合")
@@ -85,7 +107,7 @@ class SkipCard(Card):
     """跳过卡"""
 
     def __init__(self):
-        super().__init__("⏭️跳过", "跳过当前回合的抽牌阶段")
+        super().__init__("⏭️跳过", "跳过当前回合的抽牌阶段", initial_score=get_card_initial_score("Skip"))
 
     def use(self, game, player, target):
         game.gui.print(f"⏭️ {player.name} 跳过了回合")
@@ -95,7 +117,7 @@ class SuperSkipCard(Card):
     """超级跳过卡"""
 
     def __init__(self):
-        super().__init__("🚀超级跳过", "跳过剩余所有回合的抽牌阶段")
+        super().__init__("🚀超级跳过", "跳过剩余所有回合的抽牌阶段", initial_score=get_card_initial_score("SuperSkip"))
 
     def use(self, game, player, target):
         game.gui.print(f"🚀 {player.name} 跳过了剩余所有回合")
@@ -106,24 +128,24 @@ class ShuffleCard(Card):
     """洗牌卡"""
 
     def __init__(self):
-        super().__init__("🔀洗牌", "重新洗牌整个牌堆")
+        super().__init__("🔀洗牌", "重新洗牌整个牌堆", initial_score=get_card_initial_score("Shuffle"))
 
     def use(self, game, player, target):
         game.gui.print("🔀 牌堆被重新洗牌！")
         game.deck.shuffle()
-        game.ai_known = ["unknown"] * len(game.deck.cards)  # 洗牌后 AI 对所有牌的信息全部失效
+        game.ai_on_shuffle()
 
 class SwapCard(Card):
     """顶底互换卡"""
 
     def __init__(self):
-        super().__init__("🔄顶底互换", "交换牌堆顶部和底部的牌")
+        super().__init__("🔄顶底互换", "交换牌堆顶部和底部的牌", initial_score=get_card_initial_score("Swap"))
 
     def use(self, game, player, target):
         if len(game.deck.cards) > 1:
             game.gui.print(f"🔄 {player.name} 交换了牌堆顶部和底部的牌")
             game.deck.cards[0], game.deck.cards[-1] = game.deck.cards[-1], game.deck.cards[0]
-            game.ai_known[0], game.ai_known[-1] = game.ai_known[-1], game.ai_known[0]  # 同步交换 AI 已知信息
+            game.ai_on_swap_top_bottom()
         else:
             game.gui.print("😔 牌堆中牌不足，无法进行顶底互换")
 
@@ -131,7 +153,7 @@ class DrawBottomCard(Card):
     """抽底卡"""
 
     def __init__(self):
-        super().__init__("👇抽底", "抽取牌堆底部的牌而不是顶部")
+        super().__init__("👇抽底", "抽取牌堆底部的牌而不是顶部", initial_score=get_card_initial_score("DrawBottom"))
 
     def use(self, game, player, target):
         game.gui.print(f"👇 {player.name} 从牌堆底部抽牌")
@@ -141,7 +163,11 @@ class SeeFutureCard(Card):
     """预见未来卡"""
 
     def __init__(self, depth=3):
-        super().__init__(f"👁预见未来{'-' + str(depth) if depth == 5 else ''}", f"查看牌堆顶的{depth}张牌")
+        super().__init__(
+            f"👁预见未来{'-' + str(depth) if depth == 5 else ''}",
+            f"查看牌堆顶的{depth}张牌",
+            initial_score=get_card_initial_score("SeeFuture", depth=depth),
+        )
         self.depth = depth
 
     def use(self, game, player, target):
@@ -155,10 +181,12 @@ class SeeFutureCard(Card):
 
         # AI：记录这 top_count 张牌的实例
         if player.is_ai:
-            for i, card in enumerate(top_cards):
-                idx = len(game.deck.cards) - 1 - i
-                game.ai_known[idx] = card
+            game.ai_on_see_future(top_cards)
             game.gui.print(f"🤖 AI 记录了牌堆顶{top_count}张牌的信息")
+            if game.gui.debug_mode:
+                game.gui.print("🔽 AI 看到的牌堆顶（从上到下）:", debug=True)
+                for i, card in enumerate(top_cards):
+                    game.gui.print(f"{i + 1}. {card.name}", debug=True)
         # 玩家
         else:
             cards_info = [f"{i + 1}. {card.name}" for i, card in enumerate(top_cards)]
@@ -170,7 +198,11 @@ class AlterFutureCard(Card):
     """改变未来卡"""
 
     def __init__(self, depth=3):
-        super().__init__(f"🔄改变未来{'-' + str(depth) if depth == 5 else ''}", f"查看并排序牌堆顶的{depth}张牌")
+        super().__init__(
+            f"🔄改变未来{'-' + str(depth) if depth == 5 else ''}",
+            f"查看并排序牌堆顶的{depth}张牌",
+            initial_score=get_card_initial_score("AlterFuture", depth=depth),
+        )
         self.depth = depth
 
     # noinspection SpellCheckingInspection
@@ -178,26 +210,49 @@ class AlterFutureCard(Card):
         top_count = min(len(game.deck.cards), self.depth)  # 实际上看几张牌
         top_cards = list(reversed(game.deck.cards[-top_count:]))  # 反转顺序
         game.deck.cards = game.deck.cards[:-top_count]  # 移除这些牌
-        del game.ai_known[-top_count:]  # 同步删除 ai_known 顶部 top_count 条目
+        game.ai_on_remove_top(top_count)
 
         game.gui.print(f"🔄 {player.name} 正在重新排列牌堆顶的{top_count}张牌")
 
         # AI逻辑：将爆炸猫（如果有）放在第2张位置给玩家
         if player.is_ai:
-            bomb_cats = [i for i, card in enumerate(top_cards) if isinstance(card, BombCatCard)]
-            if bomb_cats and top_count > 1:
-                bomb_idx = bomb_cats[0]
-                if top_count >= 2:
-                    if game.remaining_turns == 1:
-                        top_cards[bomb_idx], top_cards[-2] = top_cards[-2], top_cards[bomb_idx]
-                    else:  # 如果下回合还是 AI，则放在最后一张
-                        top_cards[bomb_idx], top_cards[-1] = top_cards[-1], top_cards[bomb_idx]
-                    game.gui.print("🤖 AI 重新排列了牌堆顶的牌")
+            before_cards = list(reversed(top_cards))
+            # 统一在“从上到下”的抽牌顺序视角下排序和放置。
+            draw_order = list(reversed(top_cards))  # 顶 -> 底
+            non_bomb_cards = [c for c in draw_order if not isinstance(c, BombCatCard)]
+            bomb_cards = [c for c in draw_order if isinstance(c, BombCatCard)]
+
+            # 其余卡牌按分值排序，高分优先放在更早抽到的位置。
+            non_bomb_cards.sort(key=lambda c: getattr(c, "initial_score", 0), reverse=True)
+
+            if bomb_cards:
+                if game.remaining_turns == 1 and non_bomb_cards:
+                    # AI 本回合只会再抽1张：把炸弹放到第2张，优先转移给玩家。
+                    draw_order = [non_bomb_cards[0], bomb_cards[0], *non_bomb_cards[1:]]
+                    # 额外炸弹继续后置。
+                    draw_order.extend(bomb_cards[1:])
+                else:
+                    # AI 仍可能连续行动时，把炸弹后置。
+                    draw_order = non_bomb_cards + bomb_cards
+            else:
+                draw_order = non_bomb_cards
+
+            # 转回当前逻辑内部使用顺序。
+            top_cards = list(reversed(draw_order))
+            game.gui.print("🤖 AI 重新排列了牌堆顶的牌")
+
+            if game.gui.debug_mode:
+                game.gui.print("🔽 AI 改变未来前（从上到下）:", debug=True)
+                for i, card in enumerate(reversed(before_cards)):
+                    game.gui.print(f"{i + 1}. {card.name}", debug=True)
+                game.gui.print("🔽 AI 改变未来后（从上到下）:", debug=True)
+                for i, card in enumerate(draw_order):
+                    game.gui.print(f"{i + 1}. {card.name}", debug=True)
 
             # 将排序后的牌放回牌堆
             for card in top_cards:  # 倒序添加以保持原先的顺序
                 game.deck.cards.append(card)
-            game.ai_known.extend(top_cards)  # AI 知道新顺序，直接写入 card 对象
+            game.ai_on_append_known(top_cards)
 
         # 玩家逻辑：用点击界面让玩家重新排序卡牌
         else:
@@ -285,8 +340,11 @@ class AlterFutureCard(Card):
             for card in reversed(top_cards):
                 game.deck.cards.append(card)
 
-            # 更新 AI 已知信息
-            game.ai_known.extend(["unknown"] * top_count)  # 玩家重排后，AI 不知道新顺序
+            # 更新 AI 认知：玩家确认后会公开顺序日志，AI应同步为已知。
+            if result_var.get():
+                game.ai_on_append_known(top_cards)
+            else:
+                game.ai_on_append_unknown(top_count)
 
 if __name__ == "__main__":
     import BombCatGUI

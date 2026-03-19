@@ -1,13 +1,12 @@
 """
-BombCatGUI
 炸弹猫游戏的图形界面实现
 """
 import queue
 import random
 import re
-from ctypes import windll
 from tkinter import ttk, messagebox, simpledialog
 from BombCat import *
+import ai as ai_behavior
 
 
 class Deck:
@@ -29,11 +28,11 @@ class Deck:
         cards = [
             *[BombCatCard() for _ in range(self.amounts[BombCatCard])],  # 炸弹猫
             *[DefuseCard() for _ in range(self.amounts[DefuseCard])],  # 拆除卡
-            *[NopeCard() for _ in range(self.amounts[DefuseCard])],  # 拒绝卡
+            *[NopeCard() for _ in range(self.amounts[NopeCard])],  # 拒绝卡
             *[AttackCard() for _ in range(self.amounts[AttackCard])],  # 攻击卡
             *[PersonalAttackCard () for _ in range(self.amounts[PersonalAttackCard])],  # 自我攻击卡
             *[SkipCard() for _ in range(self.amounts[SkipCard])],  # 跳过卡
-            *[SuperSkipCard() for _ in range(self.amounts[SkipCard])],  # 超级跳过卡
+            *[SuperSkipCard() for _ in range(self.amounts[SuperSkipCard])],  # 超级跳过卡
             *[ShuffleCard() for _ in range(self.amounts[ShuffleCard])],  # 洗牌卡
             *[SeeFutureCard(depth=random.choices([3, 5], weights=[4, 1])[0])
                   for _ in range(self.amounts[SeeFutureCard])],  # 预见未来卡
@@ -136,7 +135,8 @@ class Game:
         self.turn_progress = 1
         self.turn_total = self.remaining_turns
 
-        self.ai_known = ["unknown"] * len(self.deck.cards)  # AI 对牌堆每张牌的认知：Card 实例 或 "unknown"
+        self.ai_known = []
+        self.ai_init_knowledge()
         self.noped = None  # =None 无人被Nope | self.player 对玩家生效 | self.ai 对AI生效
 
         gui.set_game(self)  # 设置GUI内部对game的引用
@@ -147,103 +147,93 @@ class Game:
             p.hand.append(DefuseCard())  # 强制加入一张拆除卡
             p.hand.extend(self.deck.draw(p.init_limit - 1 , refuse=[BombCatCard()]))  # 再抽5张牌 6-1=5
 
+    @staticmethod
+    def _card_short_name(card):
+        """用于Debug牌堆预览的卡牌简称。"""
+        if isinstance(card, BombCatCard):
+            return "炸"
+        if isinstance(card, DefuseCard):
+            return "拆"
+        if isinstance(card, NopeCard):
+            return "阻"
+        if isinstance(card, AttackCard):
+            return "攻"
+        if isinstance(card, PersonalAttackCard):
+            return "自"
+        if isinstance(card, SkipCard):
+            return "跳"
+        if isinstance(card, SuperSkipCard):
+            return "超"
+        if isinstance(card, ShuffleCard):
+            return "洗"
+        if isinstance(card, SwapCard):
+            return "换"
+        if isinstance(card, DrawBottomCard):
+            return "底"
+        if isinstance(card, SeeFutureCard):
+            return "预5" if getattr(card, "depth", 3) == 5 else "预"
+        if isinstance(card, AlterFutureCard):
+            return "改5" if getattr(card, "depth", 3) == 5 else "改"
+        return "?"
+
+    def print_debug_deck_snapshot(self, top_n=6, bottom_n=3):
+        """Debug模式下输出牌堆顶N张和底N张（用简称）。"""
+        if not self.gui.debug_mode:
+            return
+
+        if not self.deck.cards:
+            self.gui.print("牌堆：(空)", debug=True)
+            return
+
+        top_count = min(top_n, len(self.deck.cards))
+        bottom_count = min(bottom_n, len(self.deck.cards))
+
+        top_cards = list(reversed(self.deck.cards[-top_count:]))  # 顶 -> 下
+        bottom_cards = list(reversed(self.deck.cards[:bottom_count]))  # 上 -> 底
+
+        top_text = " ".join(self._card_short_name(c) for c in top_cards)
+        bottom_text = " ".join(self._card_short_name(c) for c in bottom_cards)
+        separator = "..." if (top_count + bottom_count) < len(self.deck.cards) else " "
+        self.gui.print(f"牌堆：{top_text}{separator}{bottom_text}", debug=True)
+
     def ai_control(self):
-        """
-        基于 ai_known 决策 AI 行为: 1. 抢拆除卡 2. 避开已知炸弹
-        Returns:
-            tuple: 返回值格式为 ('play', [可用卡牌]) 或 ('draw', None)
-        """
-        # 已知的炸弹和拆除卡在牌堆中的位置
-        bomb_pos = [i for i, c in enumerate(self.ai_known) if isinstance(c, BombCatCard)]
-        defuse_pos = [i for i, c in enumerate(self.ai_known) if isinstance(c, DefuseCard)]
-        top_idx = len(self.ai_known) - 1
-        bottom_idx = 0
-
-        # 获取手牌中各种卡
-        next_cards = self.ai.get_specific_cards('escape')
-        ssk = self.ai.get_specific_cards(SuperSkipCard)
-        sw = self.ai.get_specific_cards(SwapCard)
-        sh = self.ai.get_specific_cards(ShuffleCard)
-        db = self.ai.get_specific_cards(DrawBottomCard)
-
-        # 若已知炸弹猫位置，进攻玩家或绕过
-        if bomb_pos:
-            # 炸弹猫在顶
-            if bomb_pos[-1] == top_idx:
-                # 有逃跑牌（跳过/攻击/抽底）则使用
-                if self.remaining_turns > 1 and ssk:
-                    return 'play', ssk
-                if next_cards:
-                    return 'play', random.choice(next_cards)
-                # 否则尝试交换或洗牌
-                if sw:
-                    return 'play', sw
-                if sh:
-                    return 'play', sh
-
-            # 如果炸弹猫在第2张且下回合是玩家，直接抽走第1张
-            if bomb_pos[-1] == top_idx - 1 and self.remaining_turns == 1:
-                if len(self.ai.hand) < self.ai.hand_limit:
-                    return 'draw', None
-
-            # 如果炸弹猫在底部且有进攻牌，尝试用顶底互换然后下次进函数时跳过自己
-            if bomb_pos[0] == bottom_idx and sw and next_cards:
-                return 'play', sw
-
-        # 若已知拆除卡位置，手中无拆除卡则必抢牌，否则随机
-        if defuse_pos and (not self.ai.has_defuse() or random.random() < 0.8):
-            # 拆除卡在顶，直接抽牌
-            if defuse_pos[-1] == top_idx:
-                if len(self.ai.hand) < self.ai.hand_limit:
-                    return 'draw', None
-            # 拆除卡在底，优先出"抽底卡"再抽
-            if defuse_pos[0] == bottom_idx:
-                if db:
-                    return 'play', db
-                if sw:
-                    return 'play', sw
-            # 否则尝试用"顶底互换"将目标拉到可抽位置
-            if sw:
-                return 'play', sw
-            # 最后才抽牌
-            if len(self.ai.hand) < self.ai.hand_limit:
-                return 'draw', None
-
-        # 常规逻辑：手牌满时只能出牌，否则随机
-        cards = self.ai.get_specific_cards('playable')
-        if len(self.ai.hand) >= self.ai.hand_limit:
-            return 'play', random.choice(cards)
-        if cards:
-            return random.choice([('play', random.choice(cards)), ('draw', None)])
-        return 'draw', None
+        """将 AI 决策委托给独立模块。"""
+        return ai_behavior.ai_control(self)
 
     def ai_turn(self):
-        """执行AI回合"""
-        # AI决策逻辑
-        while self.current_player.is_ai and self.ai.alive:
-            # 出和抽都由ai_control决定
-            action, _card = self.ai_control()
-            if action == 'play' and _card:
-                # 出牌
-                while not self.play_card(self.ai, _card):
-                    # 出牌失败则强制随机出牌
-                    self.gui.print("一次出牌失败", debug=True)
-                    action, _card = 'play', random.choice(self.ai.get_specific_cards('playable'))
+        """将 AI 回合执行委托给独立模块。"""
+        ai_behavior.ai_turn(self)
 
-                if self.end_turn or self.end_all_turn:
-                    # 如果出牌结束了回合则退出循环，像抽牌一样
-                    break
-            elif action == 'draw':
-                # 抽牌
-                self.gui.print("🖐 AI 选择抽牌")
-                self.draw_card(self.ai)
-                break
-            else:
-                # 意外
-                self.gui.print("AI 无法执行操作", debug=True)
-                break
+    # AI 牌堆认知的统一入口（由 ai.py 提供实现）
+    def ai_init_knowledge(self):
+        ai_behavior.init_ai_knowledge(self)
 
-        self.gui.update_gui()
+    def ai_on_shuffle(self):
+        ai_behavior.on_shuffle(self)
+
+    def ai_on_swap_top_bottom(self):
+        ai_behavior.on_swap_top_bottom(self)
+
+    def ai_on_draw(self, from_bottom=False):
+        ai_behavior.on_draw(self, from_bottom=from_bottom)
+
+    def ai_on_insert_known(self, pos, card):
+        ai_behavior.on_insert_known(self, pos, card)
+
+    def ai_on_insert_unknown(self, pos):
+        ai_behavior.on_insert_unknown(self, pos)
+
+    def ai_on_see_future(self, top_cards):
+        ai_behavior.on_see_future(self, top_cards)
+
+    def ai_on_remove_top(self, top_count):
+        ai_behavior.on_remove_top(self, top_count)
+
+    def ai_on_append_known(self, top_cards):
+        ai_behavior.on_append_known(self, top_cards)
+
+    def ai_on_append_unknown(self, top_count):
+        ai_behavior.on_append_unknown(self, top_count)
 
     def play_card(self, player, _card):
         """处理双方出牌的底层函数"""
@@ -304,11 +294,7 @@ class Game:
 
         # 从牌堆中抽得drawn列表
         if drawn := self.deck.draw(1, from_bottom=from_bottom):
-            # 同步移除ai_known中对应位置
-            if from_bottom:
-                self.ai_known.pop(0)
-            else:
-                self.ai_known.pop(-1)
+            self.ai_on_draw(from_bottom=from_bottom)
 
             card = drawn[0]
             if isinstance(card, BombCatCard):
@@ -348,24 +334,24 @@ class Game:
             # 处理放回位置选择
             if player.is_ai:
                 pos = random.randint(0, len(self.deck.cards))
-                if player.is_ai and not self.gui.debug_mode:
+                if not self.gui.debug_mode:
                     self.gui.print(f"🤖 AI 将炸弹猫放回牌堆某个位置")
                 else:
-                    self.gui.print(f"🤖 AI 将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
+                    self.gui.print(f"[Debug] AI 将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
                 self.deck.insert_card(bomb_card, pos)
-                self.ai_known.insert(pos, bomb_card)  # 同步更新 AI 对牌堆的认知
+                self.ai_on_insert_known(pos, bomb_card)
             else:
                 # GUI处理玩家选择
                 pos = self.gui.prompt_bomb_position(len(self.deck.cards))
                 if pos is not None:
                     self.deck.insert_card(bomb_card, pos)
-                    self.ai_known.insert(pos, "unknown")
+                    self.ai_on_insert_unknown(pos)
                 else:
                     # 默认放在随机位置
                     pos = random.randint(0, len(self.deck.cards))
-                    self.gui.print(f"📌 默认将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
+                    self.gui.print(f"📌 随机将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
                     self.deck.insert_card(bomb_card, pos)
-                    self.ai_known.insert(pos, "unknown")
+                    self.ai_on_insert_unknown(pos)
 
             if self.remaining_turns >= 2:
                 self.gui.print(f"💣⏭️ {player.name} 剩余的 {self.remaining_turns - 1} 个回合立即结束")
@@ -410,9 +396,11 @@ class Game:
                 self.gui.draw_button.config(state=tk.DISABLED)  # 这两个按钮在schedule_player_turn再中启用
                 self.gui.play_button.config(state=tk.DISABLED)
                 self.gui.print(f"\n────────── 🤖 AI回合 {self.get_turn_counter_text()} ──────────\n💡 AI 正在思考...")
+                self.print_debug_deck_snapshot()
                 self.gui.schedule_ai_turn()  # 唯一接入点！
             else:
                 self.gui.print(f"\n────────── 👤 玩家回合 {self.get_turn_counter_text()} ──────────\n🧠 请出牌或抽牌...")
+                self.print_debug_deck_snapshot()
                 self.gui.draw_button.config(state=tk.NORMAL)
                 self.gui.play_button.config(state=tk.NORMAL)
 
@@ -478,7 +466,7 @@ class GUI:
         self.player_status = None
         self.ai_status = None
         self.log_text = None
-        self.max_turn_logs = 4
+        self.max_turn_logs = 10 if self.debug_mode else 5
         self.log_turns = []
         self.current_turn_log = None
 
@@ -489,13 +477,12 @@ class GUI:
         self.play_button = None
 
         # 初始化窗口
-        self.window_width = 700
+        self.window_width = 800
         self.window_height = 900
         self.init_window()
 
         # 游戏引用
         self.game = Game(gui=self)
-        windll.user32.ShowWindow(windll.kernel32.GetConsoleWindow(), self.debug_mode)  # 根据 debug_mode 决定是否隐藏命令行窗口
 
         # 初始化输出队列，启动线程
         self.print_queue = queue.Queue()
@@ -523,7 +510,7 @@ class GUI:
         # 调试信息只在调试模式下输出
         if debug:
             if self.debug_mode:
-                message = f"Debug： {message}"
+                message = f"[Debug] {message}"
             else:
                 return
 
@@ -544,24 +531,17 @@ class GUI:
             message, debug, scroll, delay = self.print_queue.get()
             last_scroll = scroll
 
-            # 如果开启了调试模式，则同时使用print输出
+            # 仅在终端输出系统级消息，避免刷出完整游戏日志
             if self.debug_mode:
-                print(message)
+                self._print_system_message_to_console(message)
 
             if hasattr(self, 'log_text') and self.log_text:
-                if self.debug_mode:
-                    self.log_text.config(state="normal")
-                    self.log_text.tag_configure("center", justify="center")
-                    self.log_text.insert("end", message + "\n", "center")
-                    self.log_text.see(scroll)
-                    self.log_text.config(state="disabled")
-                else:
-                    self._ingest_log_message(message)
-                    need_render = True
+                self._ingest_log_message(message)
+                need_render = True
 
             self.print_queue.task_done()
 
-        if need_render and not self.debug_mode:
+        if need_render:
             self._render_structured_logs(scroll=last_scroll)
 
         # 保持轮询，确保所有UI写操作都在Tk主线程执行
@@ -570,6 +550,7 @@ class GUI:
     def _configure_log_tags(self):
         """配置结构化日志样式标签"""
         self.log_text.tag_configure("turn_sep", foreground="#9AA0A6", justify="center")
+        self.log_text.tag_configure("debug_body", foreground="#0B57D0", font=("Microsoft YaHei", 11, "bold"))
 
         self.log_text.tag_configure("player_header", foreground="#0B5394", background="#E7F1FF", font=("Microsoft YaHei", 12, "bold"))
         self.log_text.tag_configure("player_block", foreground="#3C78D8", font=("Microsoft YaHei", 11, "bold"))
@@ -717,16 +698,18 @@ class GUI:
 
                 if role == "system" or role == "end":
                     for content in block:
+                        tag = "debug_body" if content.startswith("[Debug]") else f"{role}_body"
                         if content in ("规则：", "说明："):
                             self.log_text.insert("end", f"  │ {content}\n", "system_section")
                         else:
-                            self.log_text.insert("end", f"  │ {content}\n", f"{role}_body")
+                            self.log_text.insert("end", f"  │ {content}\n", tag)
                     self.log_text.insert("end", "  └────────────────\n", f"{role}_block")
                 else:
                     block_title = self._get_block_title(block)
                     self.log_text.insert("end", f"  ├─ {block_title}\n", f"{role}_block")
                     for content in block:
-                        self.log_text.insert("end", f"  │ {content}\n", f"{role}_body")
+                        tag = "debug_body" if content.startswith("[Debug]") else f"{role}_body"
+                        self.log_text.insert("end", f"  │ {content}\n", tag)
                     self.log_text.insert("end", "  └────────────────\n", f"{role}_block")
 
             # if idx < len(visible_turns) - 1:
@@ -734,6 +717,15 @@ class GUI:
 
         self.log_text.see(scroll)
         self.log_text.config(state="disabled")
+
+    def _print_system_message_to_console(self, message):
+        """仅将关键系统消息输出到终端。"""
+        if "游戏开始！" in message:
+            print("[SYSTEM] 游戏开始")
+        elif "🎮 游戏结束" in message:
+            print("[SYSTEM] 游戏结束")
+        elif "感谢游玩" in message:
+            print("[SYSTEM] 感谢游玩")
 
     # noinspection SpellCheckingInspection
     def init_window(self):
@@ -857,7 +849,7 @@ class GUI:
         self.player_status.config(text=f"玩家状态: {player_status}")
         self.ai_status.config(text=f"AI状态: {ai_status}")
 
-        if not self.debug_mode and self.current_turn_log:
+        if self.current_turn_log:
             self._render_structured_logs()
 
         self.root.update()
@@ -888,6 +880,7 @@ class GUI:
 
         # 更新初始界面
         self.print(f"[🐱 BombCat 炸弹猫]\n游戏开始！\n\n────────── 👤 玩家回合 {self.game.get_turn_counter_text()} ──────────\n🧠 请出牌或抽牌...")
+        self.game.print_debug_deck_snapshot()
         self.update_gui()
 
     def player_draw(self):
@@ -950,12 +943,15 @@ class GUI:
                 return
 
             index = selection[0]
-            self.game.play_card(self.game.player, cards[index])  # 调用游戏逻辑处理出牌
+            selected_card = cards[index]
+            dialog.destroy()
+
+            # 先关闭“选择卡牌”窗口，再执行出牌。
+            # 避免抽底触发炸弹时，后续“选择位置”弹窗被前一个grab_set窗口阻塞。
+            self.root.after_idle(lambda: self.game.play_card(self.game.player, selected_card))
 
             # 成功出卡、用卡不一定表示玩家回合结束，不能在这里结束game._next_turn中的阻塞循环
             # 所以在game.play_card中结束game._next_turn中的阻塞循环
-
-            dialog.destroy()
 
         # 绑定双击列表的事件
         card_list.bind('<Double-1>', lambda e: use_selected_card())
@@ -968,14 +964,16 @@ class GUI:
 
     def toggle_debug_mode(self, config=None):
         """切换调试模式"""
-        if config:
+        if config is not None:
             self.debug_mode = config
         else:
             self.debug_mode = not self.debug_mode
+        self.max_turn_logs = 10 if self.debug_mode else 5
+        if len(self.log_turns) > self.max_turn_logs:
+            self.log_turns = self.log_turns[-self.max_turn_logs:]
         self.update_gui()
-        windll.user32.ShowWindow(windll.kernel32.GetConsoleWindow(), self.debug_mode)  # 根据 debug_mode 决定是否隐藏命令行窗口
-        print(f"💻 Debug模式{'开启' if self.debug_mode else '关闭'}")
-        messagebox.showinfo("Debug模式", f"💻 Debug模式{'开启' if self.debug_mode else '关闭'}")
+        print(f"[Debug] Debug模式{'开启' if self.debug_mode else '关闭'}")
+        messagebox.showinfo("Debug模式", f"Debug模式{'开启' if self.debug_mode else '关闭'}")
 
     def prompt_bomb_position(self, max_pos):
         """提示玩家选择炸弹猫放回位置"""
