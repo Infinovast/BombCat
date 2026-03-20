@@ -165,12 +165,17 @@ def known_positions(game, card_cls):
     return [i for i, slot in enumerate(game.ai_known) if isinstance(slot.get("known"), card_cls)]
 
 
-def _build_actions(game):
+RESTRICTED_REPEAT_TYPES = (ShuffleCard, SwapCard, SeeFutureCard, AlterFutureCard)
+
+
+def _build_actions(game, forbidden_next_type=None):
     actions = []
     if len(game.ai.hand) < game.ai.hand_limit:
         actions.append(("draw", None))
 
     playable = game.ai.get_specific_cards("playable")
+    if forbidden_next_type is not None:
+        playable = [c for c in playable if not isinstance(c, forbidden_next_type)]
     for card in playable:
         actions.append(("play", card))
     return actions
@@ -374,10 +379,10 @@ def _action_value(state, action, remaining_cards, depth):
     return base_score, reason
 
 
-def ai_control(game, played_this_turn=0):
+def ai_control(game, played_this_turn=0, forbidden_next_type=None):
     """Score-driven AI action selection with probabilistic cognition."""
     _normalize_knowledge(game)
-    actions = _build_actions(game)
+    actions = _build_actions(game, forbidden_next_type=forbidden_next_type)
     if not actions:
         return "draw", None
 
@@ -414,12 +419,19 @@ def ai_control(game, played_this_turn=0):
 def ai_turn(game):
     """Execute one AI turn loop."""
     played_this_turn = 0
+    forbidden_next_type = None
     while game.current_player.is_ai and game.ai.alive:
-        action, _card = ai_control(game, played_this_turn=played_this_turn)
+        action, _card = ai_control(
+            game,
+            played_this_turn=played_this_turn,
+            forbidden_next_type=forbidden_next_type,
+        )
         if action == "play" and _card:
             while not game.play_card(game.ai, _card):
                 game.gui.print("一次出牌失败", debug=True)
                 playable = game.ai.get_specific_cards("playable")
+                if forbidden_next_type is not None:
+                    playable = [c for c in playable if not isinstance(c, forbidden_next_type)]
                 if not playable:
                     action, _card = "draw", None
                     break
@@ -430,6 +442,8 @@ def ai_turn(game):
                 if game.draw_card(game.ai):
                     break
 
+            # 仅限制“紧跟的下一张”：若本次打出受限功能牌，则下一次不能同类；否则清空限制。
+            forbidden_next_type = type(_card) if isinstance(_card, RESTRICTED_REPEAT_TYPES) else None
             played_this_turn += 1
 
             if game.end_turn or game.end_all_turn:

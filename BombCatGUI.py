@@ -490,13 +490,21 @@ class GUI:
 
         # 欢迎文字
         welcome_text = (f"[🐱 BombCat 炸弹猫]\n欢迎来到 BombCat！\n\n"
-                        f"规则：\n1. 👤玩家 和 🤖AI 各有{Player('').init_limit}张初始手牌，手牌上限为{Player('').hand_limit}张。\n"
+                        f"规则：\n"
+                        f"1. 开局双方各 {Player('').init_limit} 张手牌（包含 1 张拆除卡），手牌上限 {Player('').hand_limit} 张。\n"
                         f"2. 在你的回合可以任意 🃏出牌，而 ✋抽牌 会结束本回合。\n"
-                        f"3. 回合交替进行，直到抽到 💣炸弹猫 且无 🛠拆除 的一方游戏失败。\n\n"
-                        f"说明：\n1. 任何时候左键单击 [开始游戏] 都可以重开游戏；\n特别地，💻Debug 模式下右键单击 [开始游戏] 可以快速重开游戏。\n"
-                        f"2. 任何时候右键单击 [退出游戏] 都可以开关 💻Debug 模式，此模式下可以便捷地查看 AI 手牌、抽牌信息等。\n"
-                        f"3. 请仔细观察游戏日志栏周围的 UI，它们会帮助你快速上手游戏。\n"
-                        f"4. 程序作者保留最终解释权。\n\n")
+                        f"3. 回合交替进行，直到抽到 💣炸弹猫 且无 🛠拆除则死亡，存活者胜利。\n\n"
+                        f"卡牌：\n"
+                        f"- 拒绝：让对手下一张出牌失效。\n"
+                        f"- 攻击 / 自我攻击：增加并转移（或保留）连续行动回合。\n"
+                        f"- 跳过 / 超级跳过：跳过当前回合抽牌，或直接跳过剩余全部回合。\n"
+                        f"- 预见未来 / 改变未来：查看或操控牌堆顶部顺序。\n"
+                        f"- 抽底 / 顶底互换 / 洗牌：改变抽牌位置或牌序。\n"
+                        f"说明：\n"
+                        f"1. 按钮[开始游戏]：左键 / (Debug 模式下) 右键重开游戏。\n"
+                        f"2. 按钮[退出游戏]：右键开关 Debug 模式，查看 AI 思考链、手牌、牌堆等信息。\n"
+                        f"3. 游戏日志周围的 UI 会帮助你快速上手游戏。祝您游戏愉快！\n\n"
+        )
         self.print(welcome_text, scroll='1.0')
 
     def set_game(self, game):
@@ -699,7 +707,7 @@ class GUI:
                 if role == "system" or role == "end":
                     for content in block:
                         tag = "debug_body" if content.startswith("[Debug]") else f"{role}_body"
-                        if content in ("规则：", "说明："):
+                        if content in ("规则：", "说明：", "卡牌："):
                             self.log_text.insert("end", f"  │ {content}\n", "system_section")
                         else:
                             self.log_text.insert("end", f"  │ {content}\n", tag)
