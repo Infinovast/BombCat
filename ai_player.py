@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from collections import Counter
 import random
 
-from BombCat import (
+from cards import (
     AlterFutureCard,
     AttackCard,
     BombCatCard,
@@ -459,5 +459,5 @@ def ai_turn(game):
     game.gui.update_gui()
 
 if __name__ == "__main__":
-    import BombCatGUI
-    BombCatGUI.main()
+    import main
+    main.main()

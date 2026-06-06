@@ -1,12 +1,12 @@
 # BombCat
 
 <p align="center">
-  <img src="Pic/Header.png" alt="BombCat 标题图" />
+  <img src="pic/Header.png" alt="BombCat 标题图" />
 </p>
 
 BombCat 是一个基于 tkinter 的 1v1 炸弹猫对战小游戏：你与 AI 轮流行动，目标是在不断抽牌的过程中活到最后。
 
-![GUI 运行截图](Pic/app.png)
+![GUI 运行截图](pic/app.png)
 
 ## 简明规则
 
@@ -35,7 +35,7 @@ Python 3.9+
 在项目根目录执行：
 
 ```bash
-python BombCatGUI.py
+python main.py
 ```
 
 ### 基本操作
@@ -56,9 +56,10 @@ python BombCatGUI.py
 
 ## 项目结构
 
-- BombCat.py：卡牌定义与效果实现。
-- BombCatGUI.py：GUI、回合推进、AI 行为与游戏主流程。
-- Pic/：界面与项目展示图片。
+- cards.py：卡牌定义与效果实现。
+- main.py：GUI、回合推进、AI 行为与游戏主流程。
+- ai_player.py：AI 决策、概率认知建模与短视野搜索。
+- pic/：界面与项目展示图片。
 
 ## 说明
 

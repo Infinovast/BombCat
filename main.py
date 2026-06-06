@@ -4,9 +4,9 @@
 import queue
 import random
 import re
-from tkinter import ttk, messagebox, simpledialog
-from BombCat import *
-import ai as ai_behavior
+from tkinter import ttk, messagebox
+from cards import *
+import ai_player as ai_behavior
 
 
 class Deck:
@@ -204,7 +204,7 @@ class Game:
         """将 AI 回合执行委托给独立模块。"""
         ai_behavior.ai_turn(self)
 
-    # AI 牌堆认知的统一入口（由 ai.py 提供实现）
+    # AI 牌堆认知的统一入口（由 ai_player.py 提供实现）
     def ai_init_knowledge(self):
         ai_behavior.init_ai_knowledge(self)
 
@@ -489,21 +489,24 @@ class GUI:
         self.root.after(50, self._process_print_queue)
 
         # 欢迎文字
-        welcome_text = (f"[🐱 BombCat 炸弹猫]\n欢迎来到 BombCat！\n\n"
-                        f"规则：\n"
-                        f"1. 开局双方各 {Player('').init_limit} 张手牌（包含 1 张拆除卡），手牌上限 {Player('').hand_limit} 张。\n"
-                        f"2. 在你的回合可以任意 🃏出牌，而 ✋抽牌 会结束本回合。\n"
-                        f"3. 回合交替进行，直到抽到 💣炸弹猫 且无 🛠拆除则死亡，存活者胜利。\n\n"
-                        f"卡牌：\n"
-                        f"- 拒绝：让对手下一张出牌失效。\n"
-                        f"- 攻击 / 自我攻击：增加并转移（或保留）连续行动回合。\n"
-                        f"- 跳过 / 超级跳过：跳过当前回合抽牌，或直接跳过剩余全部回合。\n"
-                        f"- 预见未来 / 改变未来：查看或操控牌堆顶部顺序。\n"
-                        f"- 抽底 / 顶底互换 / 洗牌：改变抽牌位置或牌序。\n"
-                        f"说明：\n"
-                        f"1. 按钮[开始游戏]：左键 / (Debug 模式下) 右键重开游戏。\n"
-                        f"2. 按钮[退出游戏]：右键开关 Debug 模式，查看 AI 思考链、手牌、牌堆等信息。\n"
-                        f"3. 游戏日志周围的 UI 会帮助你快速上手游戏。祝您游戏愉快！\n\n"
+        welcome_text = (
+            f"[🐱 BombCat 炸弹猫]\n"
+            f"欢迎来到 BombCat！\n"
+            f"作者：Infinovast @Github\n\n"
+            f"规则：\n"
+            f"1. 开局双方各 {Player('').init_limit} 张手牌（含 1 张拆除），手牌上限 {Player('').hand_limit} 张。\n"
+            f"2. 在你的回合任意 🃏出牌，而 ✋抽牌 会结束本回合。\n"
+            f"3. 回合交替进行，直到抽到 💣炸弹猫 且无 🛠拆除则死亡，最终存活者获胜。\n\n"
+            f"卡牌：\n"
+            f"· 拒绝：让对手下一张出牌失效。\n"
+            f"· 攻击 / 自我攻击：增加并转移（或保留）连续行动回合。\n"
+            f"· 跳过 / 超级跳过：跳过当前回合抽牌，或直接跳过剩余全部回合。\n"
+            f"· 预见未来 / 改变未来：查看或操控牌堆顶部顺序。\n"
+            f"· 抽底 / 顶底互换 / 洗牌：改变抽牌位置或牌序。\n"
+            f"说明：\n"
+            f"1. 按钮[开始游戏]：左键 / 右键重开游戏（Debug 模式下）。\n"
+            f"2. 按钮[退出游戏]：右键开关 Debug 模式，查看 AI 思考链、手牌、牌堆等信息。\n"
+            f"3. 游戏日志周围的 UI 会帮助你快速上手游戏。祝您游戏愉快！\n\n"
         )
         self.print(welcome_text, scroll='1.0')
 
@@ -740,7 +743,7 @@ class GUI:
         """创建并初始化GUI窗口"""
         # 设置窗口标题和大小
         self.root.attributes("-topmost", True)  # 设置窗口置顶，下面再取消强制置顶
-        self.root.title("BombCat by Infinovast @Github")
+        self.root.title("BombCat")
         self.root.resizable(True, True)
         self.root.attributes("-topmost", False)  # 取消强制置顶
 
@@ -985,10 +988,132 @@ class GUI:
 
     def prompt_bomb_position(self, max_pos):
         """提示玩家选择炸弹猫放回位置"""
-        pos = simpledialog.askinteger("选择位置", f"💣 将炸弹猫放回的位置 (底部 0-顶部 {max_pos})：", minvalue=0, maxvalue=max_pos)
-        if pos is not None:
-            self.print(f"📌 将炸弹猫放回第 {pos} 位")
-        return pos
+        total_positions = max_pos + 1
+        result = {"pos": None, "rank": None}
+        selected_rank = {"value": None}
+        position_buttons = []
+        rank_entry = None
+
+        def rank_to_pos(rank):
+            # 牌堆内部以0为底部、max_pos为顶部；弹窗使用从上到下的直觉顺序。
+            return max_pos - rank + 1
+
+        def rank_label(rank):
+            if total_positions > 3 and rank >= total_positions - 2:
+                reverse_rank = total_positions - rank + 1
+                if reverse_rank == 1:
+                    return f"倒数第 {reverse_rank} 张（底部）"
+                return f"倒数第 {reverse_rank} 张"
+            if rank == 1:
+                return f"第 {rank} 张（顶部）"
+            if rank == total_positions:
+                return f"第 {rank} 张（底部）"
+            return f"第 {rank} 张"
+
+        def select_rank(rank):
+            selected_rank["value"] = rank
+            if rank_entry is not None:
+                rank_entry.delete(0, tk.END)
+            for btn_rank, btn in position_buttons:
+                btn.config(bg="lightblue" if btn_rank == rank else "SystemButtonFace")
+
+        def confirm_rank(rank):
+            result["rank"] = rank
+            result["pos"] = rank_to_pos(rank)
+            dialog.destroy()
+
+        def confirm_selection(event=None):
+            value = rank_entry.get().strip() if rank_entry is not None else ""
+            if value:
+                try:
+                    rank = int(value)
+                except ValueError:
+                    messagebox.showinfo("提示", f"请输入 1 到 {total_positions} 之间的整数", parent=dialog)
+                    rank_entry.focus_set()
+                    rank_entry.select_range(0, tk.END)
+                    return event
+
+                if not 1 <= rank <= total_positions:
+                    messagebox.showinfo("提示", f"请输入 1 到 {total_positions} 之间的整数", parent=dialog)
+                    rank_entry.focus_set()
+                    rank_entry.select_range(0, tk.END)
+                    return event
+
+                confirm_rank(rank)
+                return event
+
+            if selected_rank["value"] is None:
+                messagebox.showinfo("提示", "请选择一个位置", parent=dialog)
+                return event
+
+            confirm_rank(selected_rank["value"])
+            return event
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("放回炸弹猫")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        height = 350 if max_pos > 6 else max(250, 145 + total_positions * 34)
+        dialog.geometry(f"360x{height}")
+
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + self.root.winfo_width() // 2 - 180
+        y = self.root.winfo_y() + self.root.winfo_height() // 2 - height // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        tk.Label(dialog, text="💣 选择炸弹猫放回的位置（从上到下）：").pack(pady=(12, 8))
+
+        deck_frame = tk.Frame(dialog)
+        deck_frame.grid_columnconfigure(0, weight=1)
+        deck_frame.pack(fill="x", padx=24, pady=(2, 4))
+
+        def add_position_button(rank):
+            btn = tk.Button(
+                deck_frame,
+                text=rank_label(rank),
+                width=32,
+                height=1,
+                anchor="center",
+                justify="center",
+                command=lambda r=rank: select_rank(r),
+            )
+            btn.grid(row=deck_frame.grid_size()[1], column=0, sticky="ew", pady=2)
+            position_buttons.append((rank, btn))
+
+        if max_pos > 6:
+            for rank in range(1, 4):
+                add_position_button(rank)
+
+            middle_frame = tk.Frame(deck_frame, pady=6)
+            middle_frame.grid(row=deck_frame.grid_size()[1], column=0, sticky="ew")
+            middle_frame.grid_columnconfigure(1, weight=1)
+
+            tk.Label(middle_frame, text="中间：第").grid(row=0, column=0, sticky="e")
+            rank_entry = tk.Entry(middle_frame, width=8, justify="center", font=("Microsoft YaHei", 13))
+            rank_entry.grid(row=0, column=1, sticky="ew", padx=6, ipady=5)
+            tk.Label(middle_frame, text="张").grid(row=0, column=2, sticky="w")
+
+            rank_entry.bind("<Return>", confirm_selection)
+            rank_entry.focus_set()
+
+            for rank in range(total_positions - 2, total_positions + 1):
+                add_position_button(rank)
+        else:
+            for rank in range(1, total_positions + 1):
+                add_position_button(rank)
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(fill="x", pady=(2, 10))
+        tk.Button(btn_frame, text="确认", command=confirm_selection, width=12, height=1).pack(side="left", padx=(24, 8), expand=True)
+        tk.Button(btn_frame, text="随机位置", command=dialog.destroy, width=12, height=1).pack(side="right", padx=(8, 24), expand=True)
+
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+        dialog.wait_window()
+
+        if result["pos"] is not None:
+            self.print(f"📌 将炸弹猫放回从上到下{rank_label(result['rank'])}")
+        return result["pos"]
 
     def schedule_ai_turn(self):
         """安排AI回合"""
@@ -1036,5 +1161,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
