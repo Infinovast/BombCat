@@ -379,7 +379,7 @@ def _action_value(state, action, remaining_cards, depth):
     return base_score, reason
 
 
-def ai_control(game, played_this_turn=0, forbidden_next_type=None):
+def ai_control(game, played_this_turn=0, forbidden_next_type=None, previous_card=None):
     """Score-driven AI action selection with probabilistic cognition."""
     _normalize_knowledge(game)
     actions = _build_actions(game, forbidden_next_type=forbidden_next_type)
@@ -403,6 +403,24 @@ def ai_control(game, played_this_turn=0, forbidden_next_type=None):
     evals.sort(key=lambda x: x.score, reverse=True)
     best = evals[0]
 
+    if best.action[0] == "play" and isinstance(best.action[1], AttackCard):
+        attack_score = best.score
+        for item in evals:
+            if item.action[0] == "play" and isinstance(item.action[1], PersonalAttackCard):
+                item.score += attack_score
+                item.reason = f"{item.reason}；攻击衔接加成={attack_score:.2f}"
+        evals.sort(key=lambda x: x.score, reverse=True)
+        best = evals[0]
+
+    if isinstance(previous_card, PersonalAttackCard):
+        personal_attack_score = _card_initial_score(previous_card)
+        for item in evals:
+            if item.action[0] == "play" and isinstance(item.action[1], AttackCard):
+                item.score += personal_attack_score
+                item.reason = f"{item.reason}；自我攻击后续加成={personal_attack_score:.2f}"
+        evals.sort(key=lambda x: x.score, reverse=True)
+        best = evals[0]
+
     if game.gui and game.gui.debug_mode:
         game.gui.print(
             f"AI 决策: {best.action[0]} {'抽牌' if best.action[0] == 'draw' else _card_label(best.action[1])} | 评分={best.score:.2f}",
@@ -420,11 +438,13 @@ def ai_turn(game):
     """Execute one AI turn loop."""
     played_this_turn = 0
     forbidden_next_type = None
+    previous_card = None
     while game.current_player.is_ai and game.ai.alive:
         action, _card = ai_control(
             game,
             played_this_turn=played_this_turn,
             forbidden_next_type=forbidden_next_type,
+            previous_card=previous_card,
         )
         if action == "play" and _card:
             while not game.play_card(game.ai, _card):
@@ -444,6 +464,7 @@ def ai_turn(game):
 
             # 仅限制“紧跟的下一张”：若本次打出受限功能牌，则下一次不能同类；否则清空限制。
             forbidden_next_type = type(_card) if isinstance(_card, RESTRICTED_REPEAT_TYPES) else None
+            previous_card = _card
             played_this_turn += 1
 
             if game.end_turn or game.end_all_turn:
@@ -457,7 +478,3 @@ def ai_turn(game):
             break
 
     game.gui.update_gui()
-
-if __name__ == "__main__":
-    import main
-    main.main()

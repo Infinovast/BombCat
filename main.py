@@ -118,7 +118,7 @@ class Game:
     没有显式主循环，游戏循环实际上由_next_turn()推动
     """
 
-    def __init__(self, gui=None):
+    def __init__(self, gui):
         self.deck = Deck()  # 创建Deck(牌堆)实例
         self.player = Player("玩家")  # 创建Player(玩家)实例
         self.ai = Player("AI", is_ai=True)  # 创建Player(AI)实例

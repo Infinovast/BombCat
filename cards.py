@@ -345,7 +345,3 @@ class AlterFutureCard(Card):
                 game.ai_on_append_known(top_cards)
             else:
                 game.ai_on_append_unknown(top_count)
-
-if __name__ == "__main__":
-    import main
-    main.main()
