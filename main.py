@@ -2,447 +2,20 @@
 炸弹猫游戏的图形界面实现
 """
 import queue
-import random
 import re
 from tkinter import ttk, messagebox
 from cards import *
 import ai_player as ai_behavior
+from game_controller import Game, Player
 
 
-class Deck:
-    """牌堆管理器"""
+class _LogLine(str):
+    """Keep display styling separate from the visible log text."""
 
-    def __init__(self):
-        self.cards = []
-        self.discard_pile = []
-        self.amounts = {
-            BombCatCard: 4, DefuseCard: 4, NopeCard: 3, AttackCard: 4, PersonalAttackCard: 3,
-            SkipCard: 3, SuperSkipCard: 2, ShuffleCard: 2, SeeFutureCard: 2, AlterFutureCard: 3,
-            DrawBottomCard: 2, SwapCard: 2
-        }
-        self._initialize_cards()
-        self.shuffle()
-
-    def _initialize_cards(self):
-        # 卡牌配置区（可在此添加新卡牌）
-        cards = [
-            *[BombCatCard() for _ in range(self.amounts[BombCatCard])],  # 炸弹猫
-            *[DefuseCard() for _ in range(self.amounts[DefuseCard])],  # 拆除卡
-            *[NopeCard() for _ in range(self.amounts[NopeCard])],  # 拒绝卡
-            *[AttackCard() for _ in range(self.amounts[AttackCard])],  # 攻击卡
-            *[PersonalAttackCard () for _ in range(self.amounts[PersonalAttackCard])],  # 自我攻击卡
-            *[SkipCard() for _ in range(self.amounts[SkipCard])],  # 跳过卡
-            *[SuperSkipCard() for _ in range(self.amounts[SuperSkipCard])],  # 超级跳过卡
-            *[ShuffleCard() for _ in range(self.amounts[ShuffleCard])],  # 洗牌卡
-            *[SeeFutureCard(depth=random.choices([3, 5], weights=[4, 1])[0])
-                  for _ in range(self.amounts[SeeFutureCard])],  # 预见未来卡
-            *[AlterFutureCard(depth=random.choices([3, 5], weights=[4, 1])[0])
-                  for _ in range(self.amounts[AlterFutureCard])],  # 改变未来卡
-            *[DrawBottomCard() for _ in range(self.amounts[DrawBottomCard])],  # 抽底卡
-            *[SwapCard() for _ in range(self.amounts[SwapCard])],  # 顶底互换卡
-        ]
-        self.cards = cards
-
-    def shuffle(self):
-        """洗牌操作"""
-        random.shuffle(self.cards)
-
-    def draw(self, num=1, from_bottom=False, refuse=None):
-        """抽牌操作"""
-        drawn = []
-        for _ in range(num):
-            if not self.cards:
-                self.refill_from_discard()
-            if self.cards:
-                if refuse:
-                    for card in self.cards if not from_bottom else reversed(self.cards):
-                        if not any(isinstance(card, type(r)) for r in refuse):
-                            drawn.append(card)
-                            self.cards.remove(card)
-                            break
-                else:
-                    drawn.append(self.cards.pop(-1 if not from_bottom else 0))
-        return drawn
-
-    def refill_from_discard(self):
-        """用弃牌堆补充牌堆"""
-        print("♻️ 弃牌堆洗入牌堆")
-        self.cards = self.discard_pile.copy()
-        self.discard_pile.clear()
-        self.shuffle()
-
-    def insert_card(self, card, position):
-        """将卡牌插入指定位置"""
-        self.cards.insert(position, card)
-
-
-class Player:
-    """玩家类"""
-
-    def __init__(self, name, is_ai=False):
-        self.name = name
-        self.hand = []
-        self.hand_limit = 9  # 设置手牌上限
-        self.init_limit = 6  # 设置初始手牌上限
-        self.is_ai = is_ai
-        self.alive = True
-
-    def has_defuse(self):
-        """检查是否有拆除卡"""
-        return any(isinstance(c, DefuseCard) for c in self.hand)
-
-    def get_specific_cards(self, card_type):
-        """获取手牌中指定卡牌"""
-        if card_type == "playable":
-            return [c for c in self.hand if not isinstance(c, (DefuseCard, BombCatCard))]
-        elif card_type == "defensive":
-            return [c for c in self.hand if isinstance(c, (SkipCard, AttackCard, ShuffleCard, DrawBottomCard, SwapCard, AlterFutureCard))]
-        elif card_type == "escape":
-            return [c for c in self.hand if isinstance(c, (SkipCard, SuperSkipCard, AttackCard))]
-        else:
-            return [c for c in self.hand if isinstance(c, card_type)] if isinstance(card_type, (type, tuple)) else []
-
-    def hand_text(self):
-        """获取手牌文本"""
-        hand_tmp = {c.name: len([x for x in self.hand if x.name == c.name]) for c in self.hand}
-        hand_tmp = sorted(hand_tmp.items(), key=lambda item: (0 if item[0] == DefuseCard().name else 1, item[0]))
-        text = ""
-        for name, amt in hand_tmp:
-            text += f"{name} ×{amt} | "
-        return text[:-3]  # 去掉最后的[-3~-1] " | "
-
-
-class Game:
-    """
-    游戏控制器
-    没有显式主循环，游戏循环实际上由_next_turn()推动
-    """
-
-    def __init__(self, gui):
-        self.deck = Deck()  # 创建Deck(牌堆)实例
-        self.player = Player("玩家")  # 创建Player(玩家)实例
-        self.ai = Player("AI", is_ai=True)  # 创建Player(AI)实例
-        self.gui = gui  # 保存GUI引用，用于更新界面
-
-        # 有关回合
-        self._init_hands()
-        self.remaining_turns = 1
-        self.current_player = self.player
-        self.end_turn = False
-        self.end_all_turn = False
-        self.game_running = False  # Game初始化的时候游戏未开始，在start_game()中才设置为True
-        self.turn_owner = self.current_player
-        self.turn_progress = 1
-        self.turn_total = self.remaining_turns
-
-        self.ai_known = []
-        self.ai_init_knowledge()
-        self.noped = None  # =None 无人被Nope | self.player 对玩家生效 | self.ai 对AI生效
-
-        gui.set_game(self)  # 设置GUI内部对game的引用
-
-    def _init_hands(self):
-        """初始化双方手牌"""
-        for p in [self.player, self.ai]:
-            p.hand.append(DefuseCard())  # 强制加入一张拆除卡
-            p.hand.extend(self.deck.draw(p.init_limit - 1 , refuse=[BombCatCard()]))  # 再抽5张牌 6-1=5
-
-    @staticmethod
-    def _card_short_name(card):
-        """用于Debug牌堆预览的卡牌简称。"""
-        if isinstance(card, BombCatCard):
-            return "炸"
-        if isinstance(card, DefuseCard):
-            return "拆"
-        if isinstance(card, NopeCard):
-            return "阻"
-        if isinstance(card, AttackCard):
-            return "攻"
-        if isinstance(card, PersonalAttackCard):
-            return "自"
-        if isinstance(card, SkipCard):
-            return "跳"
-        if isinstance(card, SuperSkipCard):
-            return "超"
-        if isinstance(card, ShuffleCard):
-            return "洗"
-        if isinstance(card, SwapCard):
-            return "换"
-        if isinstance(card, DrawBottomCard):
-            return "底"
-        if isinstance(card, SeeFutureCard):
-            return "预5" if getattr(card, "depth", 3) == 5 else "预"
-        if isinstance(card, AlterFutureCard):
-            return "改5" if getattr(card, "depth", 3) == 5 else "改"
-        return "?"
-
-    def print_debug_deck_snapshot(self, top_n=6, bottom_n=3):
-        """Debug模式下输出牌堆顶N张和底N张（用简称）。"""
-        if not self.gui.debug_mode:
-            return
-
-        if not self.deck.cards:
-            self.gui.print("牌堆：(空)", debug=True)
-            return
-
-        top_count = min(top_n, len(self.deck.cards))
-        bottom_count = min(bottom_n, len(self.deck.cards))
-
-        top_cards = list(reversed(self.deck.cards[-top_count:]))  # 顶 -> 下
-        bottom_cards = list(reversed(self.deck.cards[:bottom_count]))  # 上 -> 底
-
-        top_text = " ".join(self._card_short_name(c) for c in top_cards)
-        bottom_text = " ".join(self._card_short_name(c) for c in bottom_cards)
-        separator = "..." if (top_count + bottom_count) < len(self.deck.cards) else " "
-        self.gui.print(f"牌堆：{top_text}{separator}{bottom_text}", debug=True)
-
-    def ai_control(self):
-        """将 AI 决策委托给独立模块。"""
-        return ai_behavior.ai_control(self)
-
-    def ai_turn(self):
-        """将 AI 回合执行委托给独立模块。"""
-        ai_behavior.ai_turn(self)
-
-    # AI 牌堆认知的统一入口（由 ai_player.py 提供实现）
-    def ai_init_knowledge(self):
-        ai_behavior.init_ai_knowledge(self)
-
-    def ai_on_shuffle(self):
-        ai_behavior.on_shuffle(self)
-
-    def ai_on_swap_top_bottom(self):
-        ai_behavior.on_swap_top_bottom(self)
-
-    def ai_on_draw(self, from_bottom=False):
-        ai_behavior.on_draw(self, from_bottom=from_bottom)
-
-    def ai_on_insert_known(self, pos, card):
-        ai_behavior.on_insert_known(self, pos, card)
-
-    def ai_on_insert_unknown(self, pos):
-        ai_behavior.on_insert_unknown(self, pos)
-
-    def ai_on_see_future(self, top_cards):
-        ai_behavior.on_see_future(self, top_cards)
-
-    def ai_on_remove_top(self, top_count):
-        ai_behavior.on_remove_top(self, top_count)
-
-    def ai_on_append_known(self, top_cards):
-        ai_behavior.on_append_known(self, top_cards)
-
-    def ai_on_append_unknown(self, top_count):
-        ai_behavior.on_append_unknown(self, top_count)
-
-    def play_card(self, player, _card):
-        """处理双方出牌的底层函数"""
-        # 传入的_card可能是单个卡牌，也可能是列表，所以这里统一为单个卡牌
-        if isinstance(_card, list):
-            card = _card[0]  # 只出一张，且_card列表里面每个元素都一样
-        else:
-            card = _card  # 这个时候_card就是单个卡牌
-
-        # player打出来的牌被Nope
-        if self.noped == player:
-            self.noped = None
-            self.gui.print(f"🚫 {player.name} 打出的 {card.name} 被 {self.get_other(player).name} 的拒绝卡阻止")
-            # 被Nope的牌也要消耗
-            player.hand.remove(card)
-            self.deck.discard_pile.append(card)
-            self.gui.update_gui()
-            return True
-
-        self.end_all_turn = False
-        if (player == self.current_player or card is NopeCard) and card in player.hand:
-            if isinstance(card, NopeCard) and self.noped == self.get_other(player):  # 阻止重复用Nope卡
-                if player.is_ai:
-                    self.gui.print(f"❌ 已存在 AI 打出的拒绝卡，无法重复打出", debug=True)  # 理论上不会触发
-                else:
-                    self.gui.print(f"❌ 已存在 玩家 打出的拒绝卡，请勿重复打出")
-                return False
-            else:
-                self.gui.print(f"🎴 {player.name} 使用了 {card.name}")
-
-            player.hand.remove(card)  # 卡牌先消耗手牌再执行效果，针对满牌时用抽底
-            card.use(self, player, self.get_other(player))
-            self.deck.discard_pile.append(card)
-            self.gui.update_gui()
-
-            if self.end_turn or self.end_all_turn:
-                # 如果是玩家回合，打开回合结束标记，结束阻塞循环
-                if not player.is_ai:
-                    self.player_turn_done = True
-                self._next_turn()  # 出牌部分的回合结束
-
-            elif not (isinstance(card, NopeCard) and player.is_ai):
-                # 间隔下一部分出牌/抽牌文字（都在同一个回合内）
-                # 回合只剩1的抽牌/end_turn/end_all_turn为True 不需要间隔，因为回合结束有回合分界线
-                self.gui.print("───────/───────")
-            return True
-
-        return False
-
-    def draw_card(self, player, from_bottom=False):
-        """处理双方抽牌的底层函数"""
-        if player != self.current_player:
-            return False
-
-        if len(player.hand) >= player.hand_limit:
-            self.gui.print(f"🈵 {player.name}手牌已满 (上限为{self.player.hand_limit}张)，请先出牌！")
-            return False
-
-        # 从牌堆中抽得drawn列表
-        if drawn := self.deck.draw(1, from_bottom=from_bottom):
-            self.ai_on_draw(from_bottom=from_bottom)
-
-            card = drawn[0]
-            if isinstance(card, BombCatCard):
-                # 炸弹流程内部会自行结束回合或结束游戏，避免在此重复推进回合
-                self._handle_bomb_cat(player, card)
-                self.gui.update_gui()
-                return True
-            else:
-                player.hand.append(card)
-                if player.is_ai and not self.gui.debug_mode:
-                    self.gui.print(f"🤖 AI 完成抽牌")
-                else:
-                    self.gui.print(f"🖐 {player.name} 抽到了 {card.name}")
-            self.gui.update_gui()
-
-            # 玩家回合结束，结束game._next_turn中的阻塞循环
-            if not player.is_ai:
-                self.player_turn_done = True
-            self._next_turn()  # 抽牌部分的回合结束
-            return True
-        else:
-            self.gui.print("牌堆已空！")
-            return False
-
-    def _handle_bomb_cat(self, player, bomb_card):
-        """处理炸弹猫逻辑"""
-        self.gui.print(f"💣 {player.name} 抽到了炸弹猫！")
-
-        # 不能用use，否则会被Nope拦截
-        if player.has_defuse():
-            self.gui.print(f"🛠 {player.name} 使用拆除卡...")
-
-            defuse_card = next(c for c in player.hand if isinstance(c, DefuseCard))
-            player.hand.remove(defuse_card)
-            self.deck.discard_pile.append(defuse_card)
-
-            # 处理放回位置选择
-            if player.is_ai:
-                pos = random.randint(0, len(self.deck.cards))
-                if not self.gui.debug_mode:
-                    self.gui.print(f"🤖 AI 将炸弹猫放回牌堆某个位置")
-                else:
-                    self.gui.print(f"[Debug] AI 将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
-                self.deck.insert_card(bomb_card, pos)
-                self.ai_on_insert_known(pos, bomb_card)
-            else:
-                # GUI处理玩家选择
-                pos = self.gui.prompt_bomb_position(len(self.deck.cards))
-                if pos is not None:
-                    self.deck.insert_card(bomb_card, pos)
-                    self.ai_on_insert_unknown(pos)
-                else:
-                    # 默认放在随机位置
-                    pos = random.randint(0, len(self.deck.cards))
-                    self.gui.print(f"📌 随机将炸弹猫放回第 {pos} 位 (0~{len(self.deck.cards)})")
-                    self.deck.insert_card(bomb_card, pos)
-                    self.ai_on_insert_unknown(pos)
-
-            if self.remaining_turns >= 2:
-                self.gui.print(f"💣⏭️ {player.name} 剩余的 {self.remaining_turns - 1} 个回合立即结束")
-            self.end_turn = True
-            self.end_all_turn = True
-            self._next_turn()  # 拆炸弹后一定结束回合
-
-        else:
-            self.gui.print(f"💥 {player.name} 没有拆除卡！爆炸了！")
-            player.alive = False  # 唯一的死亡入口
-            self.check_game_end()
-
-    def _next_turn(self):
-        """结束回合，启动下一个回合"""
-        prev_player = self.current_player
-        self.end_turn = False
-        # 抽到炸弹猫拆掉/打出SuperSkip 等，结束所有回合
-        if self.end_all_turn:
-            self.end_all_turn = False
-            self.remaining_turns = 0
-        # 没有all_end则回合-1
-        else:
-            self.remaining_turns -= 1
-
-        # 消耗回合数后，检查是否换边
-        if self.remaining_turns <= 0:
-            self.remaining_turns = 1
-            self.current_player = self.get_other(self.current_player)
-
-        self._advance_turn_counter(switched_player=(self.current_player != prev_player))
-
-        # 先检查游戏是否已经结束！游戏已结束但多输出"─👤玩家回合─"的问题在这
-        self.check_game_end()
-        self.gui.update_gui()
-
-
-
-        # 如果游戏还在进行，切换到下一个玩家
-        # 如果游戏结束了，上面check_game_end其实不会拦截，只会显示游戏结束信息和禁用按钮，靠这里复核来截停AI回合（即不开始schedule_ai_turn）
-        if self.game_running and self.ai.alive and self.player.alive:
-            if self.current_player.is_ai:
-                self.gui.draw_button.config(state=tk.DISABLED)  # 这两个按钮在schedule_player_turn再中启用
-                self.gui.play_button.config(state=tk.DISABLED)
-                self.gui.print(f"\n────────── 🤖 AI回合 {self.get_turn_counter_text()} ──────────\n💡 AI 正在思考...")
-                self.print_debug_deck_snapshot()
-                self.gui.schedule_ai_turn()  # 唯一接入点！
-            else:
-                self.gui.print(f"\n────────── 👤 玩家回合 {self.get_turn_counter_text()} ──────────\n🧠 请出牌或抽牌...")
-                self.print_debug_deck_snapshot()
-                self.gui.draw_button.config(state=tk.NORMAL)
-                self.gui.play_button.config(state=tk.NORMAL)
-
-    def _sync_turn_counter(self):
-        """同步回合计数器，确保回合内加回合时总回合数实时更新"""
-        if self.turn_owner != self.current_player:
-            self.turn_owner = self.current_player
-            self.turn_progress = 1
-            self.turn_total = max(1, self.remaining_turns)
-            return
-
-        self.turn_total = max(self.turn_total, self.remaining_turns, self.turn_progress)
-
-    def _advance_turn_counter(self, switched_player):
-        """在进入新回合时推进回合计数器"""
-        if switched_player or self.turn_owner != self.current_player:
-            self.turn_owner = self.current_player
-            self.turn_progress = 1
-            self.turn_total = max(1, self.remaining_turns)
-        else:
-            self.turn_progress += 1
-            self.turn_total = max(self.turn_total, self.remaining_turns, self.turn_progress)
-
-    def get_turn_counter_text(self):
-        """获取用于标题显示的回合计数文本，格式如 1/3"""
-        self._sync_turn_counter()
-        progress = max(1, self.turn_progress)
-        total = max(progress, self.turn_total)
-        return f"{progress}/{total}"
-
-    def check_game_end(self):
-        """检查游戏是否结束"""
-        # 用game_running来保证只能进来一次
-        if (not self.player.alive or not self.ai.alive) and self.game_running:
-            self.game_running = False  # 停止game_running在前，否则在game_end中会被拦截！
-            self.gui.game_end()
-            return True
-        return False
-
-    def get_other(self, player):
-        """获取对手实例"""
-        return self.ai if player == self.player else self.player
+    def __new__(cls, text, *, debug=False):
+        line = super().__new__(cls, text)
+        line.debug = debug
+        return line
 
 
 class GUI:
@@ -452,6 +25,7 @@ class GUI:
         # 设置窗口属性
         self.root = _root
         self.debug_mode = debug_mode
+        self._ai_paused = False
 
         # UI组件
         self.player_cards = None  # 手牌文字所在的Label，是Label对象
@@ -519,11 +93,8 @@ class GUI:
     def print(self, message, debug=False, scroll='end', delay=0.2):
         """提交输出申请到输出缓存池"""
         # 调试信息只在调试模式下输出
-        if debug:
-            if self.debug_mode:
-                message = f"[Debug] {message}"
-            else:
-                return
+        if debug and not self.debug_mode:
+            return
 
         if message:
             self.print_queue.put((message, debug, scroll, delay))
@@ -547,7 +118,7 @@ class GUI:
                 self._print_system_message_to_console(message)
 
             if hasattr(self, 'log_text') and self.log_text:
-                self._ingest_log_message(message)
+                self._ingest_log_message(message, debug=debug)
                 need_render = True
 
             self.print_queue.task_done()
@@ -631,14 +202,14 @@ class GUI:
             return f"{title} {turn['counter_snapshot']}"
         return title
 
-    def _append_log_line(self, line):
+    def _append_log_line(self, line, debug=False):
         if not self.current_turn_log:
             self._start_turn_log("system", "📣 系统消息")
 
         if not self.current_turn_log["blocks"]:
             self.current_turn_log["blocks"].append([])
 
-        self.current_turn_log["blocks"][-1].append(line)
+        self.current_turn_log["blocks"][-1].append(_LogLine(line, debug=debug))
 
     def _start_log_block(self):
         if not self.current_turn_log:
@@ -649,7 +220,7 @@ class GUI:
         if self.current_turn_log["blocks"][-1]:
             self.current_turn_log["blocks"].append([])
 
-    def _ingest_log_message(self, message):
+    def _ingest_log_message(self, message, debug=False):
         lines = [line.strip() for line in message.splitlines() if line.strip()]
         for line in lines:
             role, title = self._parse_turn_header(line)
@@ -661,7 +232,7 @@ class GUI:
                 self._start_log_block()
                 continue
 
-            self._append_log_line(line)
+            self._append_log_line(line, debug=debug)
 
     @staticmethod
     def _clean_card_name(name):
@@ -676,7 +247,8 @@ class GUI:
 
         # 规则3：抽炸弹-拆除-放回优先归类为拆弹
         if ("炸弹猫" in block_text and "使用拆除卡" in block_text and
-                ("将炸弹猫放回" in block_text or "默认将炸弹猫放回" in block_text)):
+                ("将炸弹猫放回" in block_text or "默认将炸弹猫放回" in block_text or
+                 f"将{Game._card_short_name(BombCatCard())}放回" in block_text)):
             return "拆弹"
 
 
@@ -709,7 +281,7 @@ class GUI:
 
                 if role == "system" or role == "end":
                     for content in block:
-                        tag = "debug_body" if content.startswith("[Debug]") else f"{role}_body"
+                        tag = "debug_body" if getattr(content, "debug", False) else f"{role}_body"
                         if content in ("规则：", "说明：", "卡牌："):
                             self.log_text.insert("end", f"  │ {content}\n", "system_section")
                         else:
@@ -719,7 +291,7 @@ class GUI:
                     block_title = self._get_block_title(block)
                     self.log_text.insert("end", f"  ├─ {block_title}\n", f"{role}_block")
                     for content in block:
-                        tag = "debug_body" if content.startswith("[Debug]") else f"{role}_body"
+                        tag = "debug_body" if getattr(content, "debug", False) else f"{role}_body"
                         self.log_text.insert("end", f"  │ {content}\n", tag)
                     self.log_text.insert("end", "  └────────────────\n", f"{role}_block")
 
@@ -849,9 +421,12 @@ class GUI:
         self.turn_label.config(foreground=color, text=f"当前回合: {current} (剩余{self.game.remaining_turns}回合)")
         self.deck_label.config(text=f"牌堆剩余: {len(self.game.deck.cards)}张")
 
-        bomb_prob = self.game.deck.amounts[BombCatCard] / len(self.game.deck.cards)
+        deck_count = len(self.game.deck.cards)
+        show_probability = deck_count > 0 and self.game.core.phase == "Play"
+        bomb_prob = self.game.deck.amounts[BombCatCard] / deck_count if show_probability else 0
         color = "darkred" if bomb_prob > 0.5 else "red" if bomb_prob > 0.4 else "orange" if bomb_prob > 0.3 else "green"
-        self.bomb_label.config(foreground=color, text=f"💣 {bomb_prob if bomb_prob <= 1 else 1:.1%}")
+        self.bomb_label.config(foreground=color if show_probability else "gray",
+                               text=f"💣 {bomb_prob if bomb_prob <= 1 else 1:.1%}" if show_probability else "💣 —")
 
         self.mode_label.config(text=f"游戏模式: {'Debug' if self.debug_mode else '正常'}")
         player_status = "存活" if self.game.player.alive else "死亡"
@@ -868,11 +443,20 @@ class GUI:
     def start_game(self, no_ask=False):
         """启动新游戏/重新启动游戏"""
         if self.game.game_running:
-            if no_ask or messagebox.askyesno("确认", "游戏正在进行，是否重新开始？"):
+            restart = no_ask
+            if not no_ask:
+                self._ai_paused = True
+                try:
+                    restart = messagebox.askyesno("确认", "游戏正在进行，是否重新开始？")
+                finally:
+                    self._ai_paused = False
+            if restart:
+                ai_behavior.cancel_search(self.game)
                 self.game = Game(gui=self)  # 初始化，但不重新创建GUI
             else:
                 return
         elif not self.game.ai.alive or not self.game.player.alive:
+            ai_behavior.cancel_search(self.game)
             self.game = Game(gui=self)
 
         self.game.game_running = True  # 游戏这时才开始
@@ -959,7 +543,8 @@ class GUI:
 
             # 先关闭“选择卡牌”窗口，再执行出牌。
             # 避免抽底触发炸弹时，后续“选择位置”弹窗被前一个grab_set窗口阻塞。
-            self.root.after_idle(lambda: self.game.play_card(self.game.player, selected_card))
+            game = self.game
+            self.root.after_idle(lambda: game.play_card(game.player, selected_card))
 
             # 成功出卡、用卡不一定表示玩家回合结束，不能在这里结束game._next_turn中的阻塞循环
             # 所以在game.play_card中结束game._next_turn中的阻塞循环
@@ -983,7 +568,7 @@ class GUI:
         if len(self.log_turns) > self.max_turn_logs:
             self.log_turns = self.log_turns[-self.max_turn_logs:]
         self.update_gui()
-        print(f"[Debug] Debug模式{'开启' if self.debug_mode else '关闭'}")
+        print(f"Debug模式{'开启' if self.debug_mode else '关闭'}")
         messagebox.showinfo("Debug模式", f"Debug模式{'开启' if self.debug_mode else '关闭'}")
 
     def prompt_bomb_position(self, max_pos):
@@ -1149,14 +734,21 @@ class GUI:
 
     def quit_game(self):
         """退出游戏"""
-        if messagebox.askyesno("确认", "确定要退出游戏吗？"):
+        self._ai_paused = True
+        try:
+            quit_confirmed = messagebox.askyesno("确认", "确定要退出游戏吗？")
+        finally:
+            self._ai_paused = False
+        if quit_confirmed:
+            ai_behavior.cancel_search(self.game)
             self.root.destroy()
 
 
 def main():
     """主函数"""
     root = tk.Tk()
-    GUI(root, debug_mode=False)
+    gui = GUI(root, debug_mode=False)
+    root.protocol("WM_DELETE_WINDOW", gui.quit_game)
     root.mainloop()
 
 if __name__ == "__main__":

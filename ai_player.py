@@ -1,40 +1,33 @@
-"""AI行为和牌堆认知模块"""
+"""Tkinter adapter and logs for the observation-only local search AI."""
 
-from dataclasses import dataclass
 from collections import Counter
-import random
+import sys
 
+import ai_backend
+import game_core
 from cards import (
-    AlterFutureCard,
-    AttackCard,
-    BombCatCard,
-    DefuseCard,
-    DrawBottomCard,
-    NopeCard,
-    PersonalAttackCard,
-    SeeFutureCard,
-    ShuffleCard,
-    SkipCard,
-    SuperSkipCard,
-    SwapCard,
+    AlterFutureCard, AttackCard, BombCatCard, DefuseCard, DrawBottomCard,
+    NopeCard, PersonalAttackCard, SeeFutureCard, ShuffleCard, SkipCard,
+    SuperSkipCard, SwapCard,
 )
 
 
-LOOKAHEAD_DEPTH = 2
-FUTURE_DISCOUNT = 0.65
-LOW_RISK_BOMB_THRESHOLD = 0.20
-HAND_LOW_THRESHOLD = 3
-MULTI_PLAY_PENALTY = 2.5
-NOPE_PLAY_BONUS = 10.0
-NOPED_DRAW_BONUS = 12.0
-NOPED_INVERT_FACTOR = 0.18
+_CARD_TYPES = {
+    BombCatCard: "Bomb", DefuseCard: "Defuse", NopeCard: "Nope",
+    AttackCard: "Attack", PersonalAttackCard: "PersonalAttack",
+    SkipCard: "Skip", SuperSkipCard: "SuperSkip", ShuffleCard: "Shuffle",
+    DrawBottomCard: "Bottom", SwapCard: "Swap",
+}
+_WIRE_CARD_TYPES = {key: card_type for card_type, key in _CARD_TYPES.items()}
+_PUBLIC_INVENTORY = Counter(game_core.card_to_wire(card) for card in game_core.standard_deck())
 
 
-@dataclass
-class ActionEval:
-    action: tuple
-    score: float
-    reason: str
+def card_to_wire(card):
+    if isinstance(card, SeeFutureCard):
+        return f"See{card.depth}"
+    if isinstance(card, AlterFutureCard):
+        return f"Alter{card.depth}"
+    return _CARD_TYPES[type(card)]
 
 
 def _new_unknown_entry():
@@ -46,25 +39,21 @@ def _new_known_entry(card):
 
 
 def init_ai_knowledge(game):
-    """初始化AI的牌堆认知，初始时全部未知。"""
     game.ai_known = [_new_unknown_entry() for _ in range(len(game.deck.cards))]
+    # The guaranteed opening defuse is public. No opponent cards are inspected.
+    game.ai_known_opponent = ["Defuse"]
 
 
 def _normalize_knowledge(game):
-    """将game.ai_known中的条目规范化为包含"known"键的字典形式，方便后续处理。"""
-    normalized = []
-    for entry in game.ai_known:
-        if isinstance(entry, dict) and "known" in entry:
-            normalized.append(entry)
-        elif entry == "unknown":
-            normalized.append(_new_unknown_entry())
-        else:
-            normalized.append(_new_known_entry(entry))
-    game.ai_known = normalized
+    game.ai_known = [
+        entry if isinstance(entry, dict) and "known" in entry
+        else _new_unknown_entry() if entry == "unknown"
+        else _new_known_entry(entry)
+        for entry in game.ai_known
+    ]
 
 
 def on_shuffle(game):
-    _normalize_knowledge(game)
     game.ai_known = [_new_unknown_entry() for _ in range(len(game.deck.cards))]
 
 
@@ -75,13 +64,21 @@ def on_swap_top_bottom(game):
 
 
 def on_draw(game, from_bottom=False):
+    """Called after removing the physical card, before resolving the draw."""
     _normalize_knowledge(game)
     if not game.ai_known:
         return
-    if from_bottom:
-        game.ai_known.pop(0)
-    else:
-        game.ai_known.pop(-1)
+    known = game.ai_known.pop(0 if from_bottom else -1)["known"]
+    if game.current_player is game.player and known is not None:
+        if not isinstance(known, BombCatCard):
+            game.ai_known_opponent.append(card_to_wire(known))
+
+
+def on_card_played(game, player, card):
+    if player is game.player:
+        key = card_to_wire(card)
+        if key in game.ai_known_opponent:
+            game.ai_known_opponent.remove(key)
 
 
 def on_insert_known(game, pos, card):
@@ -90,391 +87,319 @@ def on_insert_known(game, pos, card):
 
 
 def on_insert_unknown(game, pos):
-    _normalize_knowledge(game)
-    game.ai_known.insert(pos, _new_unknown_entry())
+    # The human's secret position must not shift the AI's memory precisely.
+    del pos
+    on_shuffle(game)
 
 
 def on_see_future(game, top_cards):
-    """top_cards should be [top -> down]."""
+    """The AI legitimately viewed these cards in top-to-bottom order."""
     _normalize_knowledge(game)
     for i, card in enumerate(top_cards):
-        idx = len(game.deck.cards) - 1 - i
-        if 0 <= idx < len(game.ai_known):
+        idx = len(game.ai_known) - 1 - i
+        if idx >= 0:
             game.ai_known[idx] = _new_known_entry(card)
 
 
 def on_remove_top(game, top_count):
     _normalize_knowledge(game)
-    if top_count <= 0:
-        return
-    del game.ai_known[-top_count:]
+    if top_count > 0:
+        del game.ai_known[-top_count:]
 
 
 def on_append_known(game, top_cards):
-    """在洗牌或顶底互换等操作后，将已知的 top_cards 追加到 ai_known 中，保持与现有游戏行为一致。"""
+    """Append in physical deck order: lower cards first, top card last."""
     _normalize_knowledge(game)
     game.ai_known.extend(_new_known_entry(card) for card in top_cards)
 
 
 def on_append_unknown(game, top_count):
     _normalize_knowledge(game)
-    if top_count <= 0:
-        return
     game.ai_known.extend(_new_unknown_entry() for _ in range(top_count))
-
-
-def _remaining_type_counter(game):
-    deck_counter = Counter(type(card) for card in game.deck.cards)
-    known_counter = Counter()
-    unknown_slots = 0
-
-    for slot in game.ai_known:
-        known = slot.get("known")
-        if known is None:
-            unknown_slots += 1
-        else:
-            known_counter[type(known)] += 1
-
-    remaining = Counter()
-    for cls, count in deck_counter.items():
-        remaining[cls] = max(0, count - known_counter.get(cls, 0))
-
-    return remaining, unknown_slots
-
-
-def card_probability_at(game, idx, card_cls):
-    """返回AI认知中牌堆索引idx处是card_cls类型的牌的概率。"""
-    _normalize_knowledge(game)
-    if not game.ai_known:
-        return 0.0
-
-    idx = idx % len(game.ai_known)
-    slot = game.ai_known[idx]
-    known = slot.get("known")
-    if known is not None:
-        return 1.0 if isinstance(known, card_cls) else 0.0
-
-    remaining, unknown_slots = _remaining_type_counter(game)
-    if unknown_slots <= 0:
-        return 0.0
-    return min(1.0, remaining.get(card_cls, 0) / unknown_slots)
 
 
 def known_positions(game, card_cls):
     _normalize_knowledge(game)
-    return [i for i, slot in enumerate(game.ai_known) if isinstance(slot.get("known"), card_cls)]
+    return [i for i, slot in enumerate(game.ai_known)
+            if isinstance(slot["known"], card_cls)]
 
 
-RESTRICTED_REPEAT_TYPES = (ShuffleCard, SwapCard, SeeFutureCard, AlterFutureCard)
+def card_probability_at(game, idx, card_cls):
+    """Estimate from the public inventory and observed cards, never the deck."""
+    _normalize_knowledge(game)
+    if not game.ai_known:
+        return 0.0
+    slot = game.ai_known[idx % len(game.ai_known)]["known"]
+    if slot is not None:
+        return float(isinstance(slot, card_cls))
+    unseen = _PUBLIC_INVENTORY.copy()
+    unseen.subtract(card_to_wire(card) for card in game.ai.hand)
+    unseen.subtract(card_to_wire(card) for card in game.deck.discard_pile)
+    unseen.subtract(game.ai_known_opponent)
+    unseen.subtract(card_to_wire(slot["known"]) for slot in game.ai_known
+                    if slot["known"] is not None)
+    unknown = sum(slot["known"] is None for slot in game.ai_known)
+    bombs = max(0, unseen["Bomb"])
+    if not unknown:
+        return 0.0
+    if card_cls is BombCatCard:
+        return min(1.0, bombs / unknown)
+    if card_cls is SeeFutureCard:
+        count = unseen["See3"] + unseen["See5"]
+    elif card_cls is AlterFutureCard:
+        count = unseen["Alter3"] + unseen["Alter5"]
+    else:
+        count = unseen[_CARD_TYPES[card_cls]]
+    non_bombs = sum(max(0, n) for key, n in unseen.items() if key != "Bomb")
+    return (max(0, unknown - bombs) / unknown * max(0, count) / non_bombs
+            if non_bombs else 0.0)
 
 
-def _build_actions(game, forbidden_next_type=None):
-    actions = []
-    if len(game.ai.hand) < game.ai.hand_limit:
-        actions.append(("draw", None))
-
-    playable = game.ai.get_specific_cards("playable")
-    if forbidden_next_type is not None:
-        playable = [c for c in playable if not isinstance(c, forbidden_next_type)]
-    for card in playable:
-        actions.append(("play", card))
-    return actions
-
-
-def _state_snapshot(game, played_this_turn=0):
-    top_bomb = card_probability_at(game, -1, BombCatCard)
-    top_defuse = card_probability_at(game, -1, DefuseCard)
-    bottom_bomb = card_probability_at(game, 0, BombCatCard)
-    bottom_defuse = card_probability_at(game, 0, DefuseCard)
-    playable_scores = [
-        _card_initial_score(c)
-        for c in game.ai.get_specific_cards("playable")
-    ]
-    min_playable_score = min(playable_scores) if playable_scores else 0.0
-    max_playable_score = max(playable_scores) if playable_scores else 0.0
+def build_observation(game, kind="Play", cards=()):
+    """Freeze only AI-visible data; the opponent hand is counted, not read."""
+    if hasattr(game, "core"):
+        view = game_core.observation_to_wire(game.core.observation(1))
+        if kind != "Play":
+            view["phase"] = {"kind": kind}
+            if kind == "Arrange":
+                view["phase"]["cards"] = [card_to_wire(card) for card in cards]
+        return view
+    _normalize_knowledge(game)
+    phase = {"kind": kind}
+    if kind == "Arrange":
+        phase["cards"] = [card_to_wire(card) for card in cards]
     return {
-        "has_defuse": game.ai.has_defuse(),
-        "hand_size": len(game.ai.hand),
-        "hand_limit": game.ai.hand_limit,
-        "remaining_turns": game.remaining_turns,
-        "top_bomb": top_bomb,
-        "top_defuse": top_defuse,
-        "bottom_bomb": bottom_bomb,
-        "bottom_defuse": bottom_defuse,
-        "played_this_turn": played_this_turn,
-        "ai_is_noped": game.noped == game.ai,
-        "can_play_nope": game.noped != game.player,
-        "min_playable_score": min_playable_score,
-        "max_playable_score": max_playable_score,
-        "skip_count": len(game.ai.get_specific_cards(SkipCard)),
-        "super_skip_count": len(game.ai.get_specific_cards(SuperSkipCard)),
-        "shuffle_count": len(game.ai.get_specific_cards(ShuffleCard)),
+        "player": 1,
+        "current": 1 if game.current_player is game.ai else 0,
+        "remaining": game.remaining_turns,
+        "hand": sorted(card_to_wire(card) for card in game.ai.hand),
+        "opponent_count": len(game.player.hand),
+        "known_opponent": sorted(game.ai_known_opponent),
+        "known_deck": [card_to_wire(slot["known"]) if slot["known"] else None
+                       for slot in reversed(game.ai_known)],
+        "discard": [card_to_wire(card) for card in game.deck.discard_pile],
+        "phase": phase,
+        "noped": (None if game.noped is None else 1 if game.noped is game.ai else 0),
+        "winner": (0 if not game.ai.alive else 1 if not game.player.alive else None),
     }
 
 
-def _card_label(card):
-    return getattr(card, "name", card.__class__.__name__)
-
-
-def _card_initial_score(card):
-    return float(getattr(card, "initial_score", 0.0))
-
-
-def _simulate_action(state, action):
-    """One-step abstract simulator for short-horizon search."""
-    kind, card = action
-    next_state = dict(state)
-    reason_parts = []
-    end_turn = False
-    score = 0.0
-    top_bomb = state["top_bomb"]
-    hand_size = state["hand_size"]
-    hand_is_low = hand_size <= HAND_LOW_THRESHOLD
-    hand_low_gap = max(0, HAND_LOW_THRESHOLD + 1 - hand_size) if hand_is_low else 0
-    low_risk_factor = max(0.0, (LOW_RISK_BOMB_THRESHOLD - top_bomb) / LOW_RISK_BOMB_THRESHOLD)
-
-    if kind == "draw":
-        p_bomb = state["top_bomb"]
-        p_def = state["top_defuse"]
-        death_prob = p_bomb if not state["has_defuse"] else 0.0
-        score += (1.0 - p_bomb) * 18.0
-        score += p_def * 12.0
-        score -= death_prob * 90.0
-        if state.get("ai_is_noped", False):
-            score += NOPED_DRAW_BONUS
-            reason_parts.append("当前被阻止，优先抽牌")
-        score += 9.0 * hand_low_gap
-        score += 6.0 * low_risk_factor
-        if low_risk_factor > 0:
-            reason_parts.append("低风险倾向补牌")
-        if hand_is_low:
-            if hand_size == 0:
-                reason_parts.append("没手牌了")
-            else:
-                reason_parts.append(f"手牌少({state['hand_size']}/{state['hand_limit']})")
-        reason_parts.append(f"堆顶炸弹概率={p_bomb:.1%}")
-        reason_parts.append(f"堆顶拆除概率={p_def:.1%}")
-        end_turn = True
-        next_state["hand_size"] = min(state["hand_limit"], state["hand_size"] + 1)
-        next_state["played_this_turn"] = 0
-        return score, "；".join(reason_parts), next_state, end_turn
-
-    # play card
-    next_state["hand_size"] = max(0, state["hand_size"] - 1)
-    plays_before = state.get("played_this_turn", 0)
-    next_state["played_this_turn"] = plays_before + 1
-    bottom_bomb = state["bottom_bomb"]
-    remaining_turns = state["remaining_turns"]
-    card_score = _card_initial_score(card)
-    if state.get("ai_is_noped", False):
-        min_s = state.get("min_playable_score", card_score)
-        max_s = state.get("max_playable_score", card_score)
-        inverted_score = min_s + max_s - card_score
-        score += NOPED_INVERT_FACTOR * inverted_score
-        reason_parts.append("被阻止态：低分牌优先消耗")
-
-    if isinstance(card, DrawBottomCard):
-        p_bomb = state["bottom_bomb"]
-        p_def = state["bottom_defuse"]
-        death_prob = p_bomb if not state["has_defuse"] else 0.0
-        score += (1.0 - p_bomb) * 16.0
-        score += p_def * 10.0
-        score -= death_prob * 85.0
-        reason_parts.append(f"堆底炸弹概率={p_bomb:.1%}")
-        reason_parts.append(f"堆底拆除概率={p_def:.1%}")
-        end_turn = True
-    elif isinstance(card, SkipCard):
-        score += 14.0 + 26.0 * top_bomb
-        reason_parts.append("跳过可规避本次抽牌")
-        reason_parts.append(f"顶牌炸弹风险={top_bomb:.1%}")
-        end_turn = True
-        # 需要跳过时，倾向消耗较低价值的跳过类卡。
-        score -= 0.10 * card_score
-    elif isinstance(card, SuperSkipCard):
-        score += 18.0 + 22.0 * top_bomb + 4.0 * max(0, remaining_turns - 1)
-        reason_parts.append("超级跳过可结束剩余抽牌")
-        end_turn = True
-        # 超级跳过通常价值更高，非极端风险时应更谨慎使用。
-        score -= 0.15 * card_score * (1.0 - top_bomb)
-        if low_risk_factor > 0 and state.get("super_skip_count", 0) <= 1:
-            score -= 14.0 * low_risk_factor
-            reason_parts.append("低风险且仅剩1张超级跳过，优先保留")
-    elif isinstance(card, AttackCard):
-        score += 16.0 + 24.0 * top_bomb
-        reason_parts.append("攻击可转移抽牌压力")
-        end_turn = True
-    elif isinstance(card, ShuffleCard):
-        # 抽象上只保留炸弹密度，清空位置信息
-        avg_bomb = max(top_bomb, bottom_bomb)
-        next_state["top_bomb"] = avg_bomb
-        next_state["bottom_bomb"] = avg_bomb
-        score += 6.0 + 18.0 * top_bomb
-        reason_parts.append("洗牌重置高风险已知位置")
-        if low_risk_factor > 0:
-            score -= 12.0 * low_risk_factor
-            # reason_parts.append("低风险不应无必要洗牌")
-    elif isinstance(card, SwapCard):
-        next_state["top_bomb"], next_state["bottom_bomb"] = bottom_bomb, top_bomb
-        next_state["top_defuse"], next_state["bottom_defuse"] = state["bottom_defuse"], state["top_defuse"]
-        score += 5.0 + 20.0 * (top_bomb - bottom_bomb)
-        reason_parts.append("顶底互换转移顶牌风险")
-    elif isinstance(card, SeeFutureCard):
-        score += 8.0 + 8.0 * top_bomb
-        reason_parts.append("预见未来提升信息优势")
-    elif isinstance(card, AlterFutureCard):
-        score += 10.0 + 12.0 * top_bomb
-        reason_parts.append("改变未来可主动规避炸弹")
-    elif isinstance(card, PersonalAttackCard):
-        score += -6.0 + 10.0 * (1.0 - top_bomb)
-        reason_parts.append("自我攻击倾向在低风险时使用")
-    elif isinstance(card, NopeCard):
-        if state.get("can_play_nope", True):
-            score += NOPE_PLAY_BONUS
-            reason_parts.append("提高拒绝卡使用倾向")
-        else:
-            score -= 80.0
-            reason_parts.append("拒绝卡不能重复打出")
+def _short_wire_name(game, key):
+    """Reuse the original UI's single source of card abbreviations."""
+    if key in ("See3", "See5"):
+        card = SeeFutureCard(depth=int(key[-1]))
+    elif key in ("Alter3", "Alter5"):
+        card = AlterFutureCard(depth=int(key[-1]))
     else:
-        score += 1.0
-        reason_parts.append(f"出牌 {_card_label(card)}")
-
-    # 低风险时降低主动消耗后备牌的倾向；手牌少(<=3)时优先保留后备牌。
-    play_consumption_penalty = (8.0 * low_risk_factor) + (6.0 * hand_low_gap * (0.5 + 0.5 * low_risk_factor))
-    if play_consumption_penalty > 0:
-        score -= play_consumption_penalty
-
-    # 将卡牌初始分纳入“保留成本”：低风险时高分牌更不应被消耗。
-    preserve_weight = 0.08 + 0.16 * low_risk_factor
-    score -= card_score * preserve_weight
-    if low_risk_factor > 0 and card_score >= 30:
-        reason_parts.append(f"尝试保留高分牌({_card_label(card)}={card_score:.0f})")
-
-    # 单回合内连打多张牌轻微加罚：第二张开始逐步扣分。
-    if plays_before > 0:
-        multi_penalty = MULTI_PLAY_PENALTY * plays_before
-        score -= multi_penalty
-        reason_parts.append(f"连打{plays_before + 1}张牌轻罚={multi_penalty:.1f}")
-
-    return score, "；".join(reason_parts), next_state, end_turn
+        card = _WIRE_CARD_TYPES[key]()
+    return game._card_short_name(card)
 
 
-def _action_value(state, action, remaining_cards, depth):
-    base_score, reason, next_state, end_turn = _simulate_action(state, action)
-
-    if depth <= 0 or end_turn:
-        return base_score, reason
-
-    # 抽象短期视野预测：假设我们可以选择一个更好的行动。
-    future_scores = []
-    for card in remaining_cards:
-        future_scores.append(_simulate_action(next_state, ("play", card))[0])
-    if next_state["hand_size"] < next_state["hand_limit"]:
-        future_scores.append(_simulate_action(next_state, ("draw", None))[0])
-
-    if future_scores:
-        lookahead = max(future_scores)
-        total = base_score + FUTURE_DISCOUNT * lookahead
-        return total, f"{reason}；短视野评估={lookahead:.2f}"
-
-    return base_score, reason
+def _action_text(game, action):
+    kind = action["kind"]
+    if kind == "Draw":
+        return "抽牌"
+    if kind == "Play":
+        return f"出{_short_wire_name(game, action['card'])}"
+    if kind == "Replace":
+        return f"放{_short_wire_name(game, 'Bomb')}→第{action['position'] + 1}位"
+    return "重排[" + " ".join(_short_wire_name(game, key) for key in action["cards"]) + "]"
 
 
-def ai_control(game, played_this_turn=0, forbidden_next_type=None, previous_card=None):
-    """Score-driven AI action selection with probabilistic cognition."""
-    _normalize_knowledge(game)
-    actions = _build_actions(game, forbidden_next_type=forbidden_next_type)
-    if not actions:
-        return "draw", None
+def _known_cards_text(game, cards):
+    return "、".join(f"{_short_wire_name(game, key)}×{count}"
+                    for key, count in Counter(cards).items()) or "无"
 
-    state = _state_snapshot(game, played_this_turn=played_this_turn)
-    state["ai_known"] = game.ai_known
 
-    evals = []
-    playable = game.ai.get_specific_cards("playable")
-    for action in actions:
-        # 如果当前行动是出牌，则从未来候选中移除一张同类型的牌，以模拟手牌消耗后的情况。
-        remaining_cards = playable.copy()
-        if action[0] == "play" and action[1] in remaining_cards:
-            remaining_cards.remove(action[1])
+def _bomb_risk(view, index):
+    """Use the same uniform unknown-position belief as the search, not the real deck."""
+    deck = view["known_deck"]
+    if not deck:
+        return None
+    if deck[index] is not None:
+        return float(deck[index] == "Bomb")
+    unseen = _PUBLIC_INVENTORY.copy()
+    for cards in (view["hand"], view["discard"], view["known_opponent"]):
+        unseen.subtract(cards)
+    unseen.subtract(card for card in deck if card is not None)
+    if view["phase"]["kind"] == "Replace":
+        unseen["Bomb"] -= 1
+    elif view["phase"]["kind"] == "Arrange":
+        unseen.subtract(view["phase"]["cards"])
+    return min(1.0, max(0, unseen["Bomb"]) / deck.count(None))
 
-        score, reason = _action_value(state, action, remaining_cards, depth=LOOKAHEAD_DEPTH - 1)
-        evals.append(ActionEval(action=action, score=score, reason=reason))
 
-    evals.sort(key=lambda x: x.score, reverse=True)
-    best = evals[0]
+def _log_decision(game, view, result):
+    """Show each decision field on its own line in debugging mode."""
+    if not game.gui.debug_mode:
+        return
+    bomb = _short_wire_name(game, "Bomb")
+    defuse = _short_wire_name(game, "Defuse")
+    context = [f"余{view['remaining']}次", f"{defuse}{view['hand'].count('Defuse')}",
+               f"对手{view['opponent_count']}张（已知{_known_cards_text(game, view['known_opponent'])}）"]
+    if view["noped"] is not None:
+        target = "AI" if view["noped"] == view["player"] else "玩家"
+        context.append(f"{_short_wire_name(game, 'Nope')}待生效→{target}")
+    phase = view["phase"]["kind"]
+    if phase == "Play":
+        for label, index in (("顶", 0), ("底", -1)):
+            risk = _bomb_risk(view, index)
+            if risk is not None:
+                source = "记忆" if view["known_deck"][index] is not None else "推算"
+                context.append(f"{label}{bomb}{risk:.1%}（{source}）")
+    elif phase == "Arrange":
+        context.append("待排[" + " ".join(_short_wire_name(game, key)
+                                         for key in view["phase"]["cards"]) + "]（顶→底）")
+    else:
+        context.append("拆弹放回（位置从顶计）")
 
-    if best.action[0] == "play" and isinstance(best.action[1], AttackCard):
-        attack_score = best.score
-        for item in evals:
-            if item.action[0] == "play" and isinstance(item.action[1], PersonalAttackCard):
-                item.score += attack_score
-                item.reason = f"{item.reason}；攻击衔接加成={attack_score:.2f}"
-        evals.sort(key=lambda x: x.score, reverse=True)
-        best = evals[0]
-
-    if isinstance(previous_card, PersonalAttackCard):
-        personal_attack_score = _card_initial_score(previous_card)
-        for item in evals:
-            if item.action[0] == "play" and isinstance(item.action[1], AttackCard):
-                item.score += personal_attack_score
-                item.reason = f"{item.reason}；自我攻击后续加成={personal_attack_score:.2f}"
-        evals.sort(key=lambda x: x.score, reverse=True)
-        best = evals[0]
-
-    if game.gui and game.gui.debug_mode:
+    iterations = result.get("iterations", 0)
+    elapsed = result.get("elapsed_ms", 0)
+    game.gui.print(f"AI 决策：{_action_text(game, result['action'])}", debug=True)
+    game.gui.print(f"局面：{'；'.join(context)}", debug=True)
+    search = f"{iterations}次/{elapsed}ms" + ("（启发式）" if not iterations else "")
+    game.gui.print(f"搜索：{search}", debug=True)
+    for index, candidate in enumerate(result.get("candidates", [])[:3], start=1):
+        visits = candidate["visits"]
+        value = candidate.get("value")
+        estimate = f"值{value:.3f}" if visits and value is not None else "未评估"
         game.gui.print(
-            f"AI 决策: {best.action[0]} {'抽牌' if best.action[0] == 'draw' else _card_label(best.action[1])} | 评分={best.score:.2f}",
+            f"候选{index}：{_action_text(game, candidate['action'])} | {visits}次/{estimate}",
             debug=True,
         )
-        game.gui.print(f"理由: {best.reason}", debug=True)
-        for idx, item in enumerate(evals[1:3], start=2):
-            label = "抽牌" if item.action[0] == "draw" else _card_label(item.action[1])
-            game.gui.print(f"候选{idx}: {item.action[0]} {label} | 评分={item.score:.2f}", debug=True)
+    deck = view["known_deck"]
+    memory = " ".join(_short_wire_name(game, key) if key is not None else "?" for key in deck)
+    known = sum(key is not None for key in deck)
+    game.gui.print(
+        f"AI牌堆记忆（顶→底，已知{known}/{len(deck)}）：{memory or '(空)'}", debug=True,
+    )
 
-    return best.action
+
+def _play_card_for_action(game, action):
+    return next((card for card in game.ai.hand
+                 if card_to_wire(card) == action.get("card")), None)
+
+
+def _validate_action(game, action, kind, cards):
+    if not isinstance(action, dict):
+        raise RuntimeError("AI response does not contain an action")
+    action_kind = action.get("kind")
+    if kind == "Play":
+        if action_kind == "Draw":
+            if len(game.ai.hand) < game.ai.hand_limit and len(game.deck.cards) > 0:
+                return
+        elif action_kind == "Play":
+            card = _play_card_for_action(game, action)
+            if card is not None and not isinstance(card, (BombCatCard, DefuseCard)):
+                if not (isinstance(card, NopeCard) and game.noped is game.player):
+                    return
+    elif kind == "Replace" and action_kind == "Replace":
+        pos = action.get("position")
+        if type(pos) is int and 0 <= pos <= len(game.deck.cards):
+            return
+    elif kind == "Arrange" and action_kind == "Order":
+        order = action.get("cards")
+        if isinstance(order, list) and Counter(order) == Counter(map(card_to_wire, cards)):
+            return
+    raise RuntimeError("AI returned an illegal action")
+
+
+def ai_control(game, *, iterations=700, time_limit_ms=650, seed=None):
+    """Synchronous observation-only entry point for scripted tests/tools."""
+    view = build_observation(game)
+    result = ai_backend.search(view, iterations=iterations,
+                            time_limit_ms=time_limit_ms, seed=seed)
+    action = result["action"]
+    _validate_action(game, action, "Play", ())
+    _log_decision(game, view, result)
+    return ("draw", None) if action["kind"] == "Draw" else (
+        "play", _play_card_for_action(game, action))
+
+
+def _is_active(game):
+    return (getattr(game.gui, "game", None) is game and game.game_running
+            and game.ai.alive and game.player.alive and game.current_player is game.ai)
+
+
+def cancel_search(game):
+    task = getattr(game, "_ai_task", None)
+    if task is not None:
+        task.cancel()
+    game._ai_task = None
+    game._ai_pending = False
+
+
+def _start_choice(game, kind, cards, callback):
+    if not _is_active(game) or getattr(game, "_ai_pending", False):
+        return
+    cards = tuple(cards)
+    view = build_observation(game, kind, cards)
+    revision = getattr(game, "_turn_revision", 0)
+    task = ai_backend.SearchTask(view)
+    game._ai_task = task
+    game._ai_pending = True
+
+    def poll():
+        if getattr(game, "_ai_task", None) is not task:
+            task.cancel()
+            return
+        if (not _is_active(game) or getattr(game, "_turn_revision", 0) != revision
+                or build_observation(game, kind, cards) != view):
+            cancel_search(game)
+            return
+        # Results cannot advance the game behind an original Tk modal dialog.
+        grab_current = getattr(game.gui.root, "grab_current", None)
+        if (getattr(game.gui, "_ai_paused", False)
+                or callable(grab_current) and grab_current() is not None):
+            game.gui.root.after(25, poll)
+            return
+        done, result, error = task.poll()
+        if not done:
+            game.gui.root.after(25, poll)
+            return
+        game._ai_task = None
+        game._ai_pending = False
+        if error is not None:
+            print(f"BombCat AI: {error}", file=sys.stderr)
+            game.gui.print("AI 无法执行操作", debug=True)
+            return
+        try:
+            action = result["action"]
+            _validate_action(game, action, kind, cards)
+        except (KeyError, TypeError, RuntimeError) as exc:
+            print(f"BombCat AI: {exc}", file=sys.stderr)
+            game.gui.print("AI 无法执行操作", debug=True)
+            return
+        _log_decision(game, view, result)
+        callback(action)
+
+    game.gui.root.after(25, poll)
+
+
+def begin_private_choice(game, kind, cards, callback):
+    """Search an AI-owned reinsertion or reorder; apply on the Tk thread."""
+    if kind not in ("Replace", "Arrange"):
+        raise ValueError("Expected an AI private-choice phase")
+    _start_choice(game, kind, cards, callback)
 
 
 def ai_turn(game):
-    """Execute one AI turn loop."""
-    played_this_turn = 0
-    forbidden_next_type = None
-    previous_card = None
-    while game.current_player.is_ai and game.ai.alive:
-        action, _card = ai_control(
-            game,
-            played_this_turn=played_this_turn,
-            forbidden_next_type=forbidden_next_type,
-            previous_card=previous_card,
-        )
-        if action == "play" and _card:
-            while not game.play_card(game.ai, _card):
-                game.gui.print("一次出牌失败", debug=True)
-                playable = game.ai.get_specific_cards("playable")
-                if forbidden_next_type is not None:
-                    playable = [c for c in playable if not isinstance(c, forbidden_next_type)]
-                if not playable:
-                    action, _card = "draw", None
-                    break
-                action, _card = "play", random.choice(playable)
+    """Search one action in a worker, then continue only the current game."""
+    if not _is_active(game) or getattr(game, "_ai_pending", False):
+        return
 
-            if action == "draw":
-                game.gui.print("🖐 AI 选择抽牌", debug=True)
-                if game.draw_card(game.ai):
-                    break
-
-            # 仅限制“紧跟的下一张”：若本次打出受限功能牌，则下一次不能同类；否则清空限制。
-            forbidden_next_type = type(_card) if isinstance(_card, RESTRICTED_REPEAT_TYPES) else None
-            previous_card = _card
-            played_this_turn += 1
-
-            if game.end_turn or game.end_all_turn:
-                break
-        elif action == "draw":
+    def apply(action):
+        revision = getattr(game, "_turn_revision", 0)
+        if action["kind"] == "Draw":
             game.gui.print("🖐 AI 选择抽牌")
-            game.draw_card(game.ai)
-            break
+            ok = game.draw_card(game.ai)
         else:
-            game.gui.print("AI 无法执行操作", debug=True)
-            break
+            ok = game.play_card(game.ai, _play_card_for_action(game, action))
+        if not ok:
+            game.gui.print("一次出牌失败", debug=True)
+            return
+        if (_is_active(game) and not getattr(game, "_ai_pending", False)
+                and getattr(game, "_turn_revision", 0) == revision):
+            game.gui.root.after(150, lambda: ai_turn(game))
 
-    game.gui.update_gui()
+    _start_choice(game, "Play", (), apply)
