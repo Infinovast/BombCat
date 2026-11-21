@@ -114,7 +114,7 @@ class ControllerCoreTests(unittest.TestCase):
             self.assertEqual(expected.phase_cards,
                              tuple(core.card_from_wire(ai_player.card_to_wire(card)) for card in visible))
             self.assertEqual(expected.observation(1), core.observation_from_wire(
-                ai_player.build_observation(game, kind, visible)))
+                ai_player.build_observation(game)))
             game._ai_pending = True
             pending.append(callback)
 
@@ -141,7 +141,7 @@ class ControllerCoreTests(unittest.TestCase):
                 def capture(game, kind, visible, callback):
                     self.assertEqual("Replace", kind)
                     self.assertEqual(expected.observation(1), core.observation_from_wire(
-                        ai_player.build_observation(game, kind, visible)))
+                        ai_player.build_observation(game)))
                     game._ai_pending = True
                     pending.append(callback)
 

@@ -6,8 +6,10 @@ from unittest.mock import Mock, patch
 
 import ai_player
 import cards
+import game_core as core
 import main
 import ai_backend
+from tests.test_controller_core import scenario
 from tests.test_tkinter import new_game
 
 
@@ -137,8 +139,8 @@ class DiagnosticsFormatTests(unittest.TestCase):
         game.deck.discard_pile = Unreadable()
         game.player.hand = Unreadable()
         game.ai.hand = Unreadable()
-        game.ai_known = Unreadable()
-        game.ai_known_opponent = Unreadable()
+        game.core.known = Unreadable()
+        game.core.known_opponent = Unreadable()
         game.remaining_turns = 999
         ai_player._log_decision(game, view, result)
         self.assertEqual(original, game.gui.messages)
@@ -236,7 +238,9 @@ class DiagnosticsDeliveryTests(unittest.TestCase):
 
     def test_async_log_occurs_immediately_before_validated_callback(self):
         game = new_game()
-        game.current_player = game.ai
+        game.core = scenario([core.Card.DEFUSE], [core.Card.DEFUSE], top=[core.Card.BOMB], current=1)
+        game.core.apply(core.DRAW, game._rng)
+        game._sync_from_core()
         events = []
         self.Task.result = diagnostic_result({"kind": "Replace", "position": 0})
         with patch("ai_player._log_decision", side_effect=lambda *args: events.append("log")):
@@ -266,8 +270,11 @@ class DiagnosticsDeliveryTests(unittest.TestCase):
 
     def test_async_private_order_logs_with_frozen_visible_cards(self):
         game = new_game()
-        game.current_player = game.ai
-        visible = [cards.BombCatCard(), cards.SeeFutureCard(5), cards.SkipCard()]
+        game.core = scenario([core.Card.DEFUSE], [core.Card.ALTER3],
+                             top=[core.Card.BOMB, core.Card.SEE5, core.Card.SKIP], current=1)
+        game.core.apply(core.Action("Play", card=core.Card.ALTER3), game._rng)
+        game._sync_from_core()
+        visible = game._held_cards[:]
         self.Task.result = diagnostic_result({"kind": "Order", "cards": ["Skip", "Bomb", "See5"]})
         callback = Mock()
         with patch("ai_player._log_decision") as log:

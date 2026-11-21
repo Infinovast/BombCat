@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import ai_player
 import cards
+import game_core as core
 import main
 
 
@@ -127,6 +128,23 @@ def all_cards(game):
     return game.deck.cards + game.deck.discard_pile + game.player.hand + game.ai.hand
 
 
+def install_card_layout(game, *, known_top=0):
+    """Load a test scenario from the arranged display cards into the rules core."""
+    def code(card):
+        return core.card_from_wire(ai_player.card_to_wire(card))
+
+    state = game.core
+    state.deck = [code(card) for card in reversed(game.deck.cards)]
+    state.hands = [[code(card) for card in player.hand] for player in (game.player, game.ai)]
+    state.discard = [code(card) for card in game.deck.discard_pile]
+    state.known = [[None] * len(state.deck) for _ in state.hands]
+    state.known[1][:known_top] = state.deck[:known_top]
+    for observer, cards_in_hand in enumerate(reversed(state.hands)):
+        available = Counter(cards_in_hand)
+        state.known_opponent[observer] = list((Counter(state.known_opponent[observer]) & available).elements())
+    state.check_invariants()
+
+
 def give_card(game, player, card_type, *, depth=None):
     """Move an existing card into a scenario hand without creating extra cards."""
     for zone in (player.hand, game.deck.cards, game.get_other(player).hand):
@@ -240,9 +258,7 @@ class TkRulesTests(unittest.TestCase):
         self.assertEqual(34, len({id(card) for card in inventory}))
         self.assertEqual(4, sum(isinstance(card, cards.DefuseCard) for card in inventory))
         self.assertEqual(4, sum(isinstance(card, cards.BombCatCard) for card in inventory))
-        self.assertEqual(len(game.deck.cards), len(game.ai_known))
-        for known, actual in zip(game.ai_known, game.deck.cards):
-            self.assertTrue(known["known"] is None or known["known"] is actual)
+        game.core.check_invariants()
 
     def _bomb_draw_with_thirteen_remaining(self, *, ai=True, debug=True):
         game = new_game()
@@ -257,8 +273,7 @@ class TkRulesTests(unittest.TestCase):
             game.deck.cards.remove(card)
             game.deck.discard_pile.append(card)
         game.deck.cards.append(bomb)
-        game.ai_on_shuffle()
-        game._sync_to_core()
+        install_card_layout(game)
         self.assertEqual(14, len(game.deck.cards))
         self.assert_inventory(game)
         return game, bomb
@@ -282,17 +297,15 @@ class TkRulesTests(unittest.TestCase):
             for depth in (3, 5):
                 game = new_game(depth)
                 card = give_card(game, game.player, cards.AlterFutureCard, depth=depth)
-                game.ai_on_shuffle()
                 original = game.deck.cards[:]
-                game.ai_on_see_future(list(reversed(game.deck.cards[-depth:])))
-                game._sync_to_core()
+                install_card_layout(game, known_top=depth)
                 with alter_dialog(mode, swap=True):
                     self.assertTrue(game.play_card(game.player, card))
                 expected = original[:]
                 if mode == "confirm":
                     expected[-1], expected[-2] = expected[-2], expected[-1]
                 self.assertEqual(expected, game.deck.cards, (mode, depth))
-                self.assertTrue(all(slot["known"] is None for slot in game.ai_known[-depth:]))
+                self.assertEqual([None] * depth, game.core.known[1][:depth])
                 self.assert_inventory(game)
 
     def test_known_card_draw_records_only_publicly_deducible_opponent_card(self):
@@ -300,12 +313,10 @@ class TkRulesTests(unittest.TestCase):
         known = next(card for card in game.deck.cards if not isinstance(card, cards.BombCatCard))
         game.deck.cards.remove(known)
         game.deck.cards.append(known)
-        game.ai_on_shuffle()
-        game.ai_on_see_future([known])
-        game._sync_to_core()
-        before = Counter(game.ai_known_opponent)
+        install_card_layout(game, known_top=1)
+        before = Counter(ai_player.build_observation(game)["known_opponent"])
         game.draw_card(game.player)
-        after = Counter(game.ai_known_opponent)
+        after = Counter(ai_player.build_observation(game)["known_opponent"])
         self.assertEqual(before + Counter([ai_player.card_to_wire(known)]), after)
         self.assert_inventory(game)
 
@@ -314,12 +325,10 @@ class TkRulesTests(unittest.TestCase):
         bottom = next(card for card in game.deck.cards if not isinstance(card, cards.BombCatCard))
         game.deck.cards.remove(bottom)
         game.deck.cards.insert(0, bottom)
-        game.ai_on_shuffle()
         card = give_card(game, game.player, cards.DrawBottomCard)
-        game.ai_on_shuffle()
         revision = game._turn_revision
         game.remaining_turns = 3
-        game._sync_to_core()
+        install_card_layout(game)
         self.assertTrue(game.play_card(game.player, card))
         self.assertEqual(revision + 1, game._turn_revision)
         self.assertEqual(2, game.remaining_turns)
@@ -332,8 +341,7 @@ class TkRulesTests(unittest.TestCase):
         safe = next(card for card in game.deck.cards if not isinstance(card, cards.BombCatCard))
         game.deck.cards.remove(safe)
         game.deck.cards.append(safe)
-        game.ai_on_shuffle()
-        game._sync_to_core()
+        install_card_layout(game)
         gui = game.gui
         replacement = []
 
@@ -376,7 +384,8 @@ class TkRulesTests(unittest.TestCase):
         order = list(reversed(top_first))
         pending[0]({"kind": "Order", "cards": [ai_player.card_to_wire(value) for value in order]})
         self.assertEqual(order, list(reversed(game.deck.cards[-card.depth:])))
-        self.assertEqual(order, [slot["known"] for slot in reversed(game.ai_known[-card.depth:])])
+        self.assertEqual([ai_player.card_to_wire(value) for value in order],
+                         ai_player.build_observation(game)["known_deck"][:card.depth])
         self.assert_inventory(game)
 
     def test_ai_bomb_replacement_maps_top_index_and_ends_all_actions(self):
@@ -386,8 +395,7 @@ class TkRulesTests(unittest.TestCase):
         bomb = next(card for card in game.deck.cards if isinstance(card, cards.BombCatCard))
         game.deck.cards.remove(bomb)
         game.deck.cards.append(bomb)
-        game.ai_on_shuffle()
-        game._sync_to_core()
+        install_card_layout(game)
         pending = []
 
         def capture(game, kind, visible, callback):
@@ -403,7 +411,7 @@ class TkRulesTests(unittest.TestCase):
         game._ai_pending = False
         pending[0]({"kind": "Replace", "position": 0})
         self.assertIs(bomb, game.deck.cards[-1])
-        self.assertIs(bomb, game.ai_known[-1]["known"])
+        self.assertEqual(core.Card.BOMB, game.core.known[1][0])
         self.assertIs(game.player, game.current_player)
         self.assertEqual(1, game.remaining_turns)
         self.assert_inventory(game)
@@ -412,6 +420,7 @@ class TkRulesTests(unittest.TestCase):
         for position in (0, 4, 13):
             with self.subTest(top_based_position=position):
                 game, bomb = self._bomb_draw_with_thirteen_remaining()
+                install_card_layout(game, known_top=3)
                 pending = []
 
                 def capture(game, kind, visible, callback):
@@ -422,9 +431,10 @@ class TkRulesTests(unittest.TestCase):
                 with patch("ai_player.begin_private_choice", capture):
                     self.assertTrue(game.draw_card(game.ai))
                 before = game.deck.cards[:]
+                known_before = game.core.known[1][:]
                 self.assertEqual(13, len(before))
                 action = {"kind": "Replace", "position": position}
-                view = ai_player.build_observation(game, "Replace")
+                view = ai_player.build_observation(game)
                 ai_player._log_decision(game, view, {
                     "action": action, "iterations": 1, "elapsed_ms": 1,
                     "selection": "most_visited", "candidates": [],
@@ -449,8 +459,10 @@ class TkRulesTests(unittest.TestCase):
                 expected.insert(internal_index, bomb)
                 self.assertEqual(expected, game.deck.cards)
                 self.assertIs(bomb, game.deck.cards[internal_index])
-                self.assertIs(bomb, game.ai_known[internal_index]["known"])
                 self.assertEqual("Bomb", ai_player.build_observation(game)["known_deck"][position])
+                expected_memory = known_before[:]
+                expected_memory.insert(position, core.Card.BOMB)
+                self.assertEqual(expected_memory, game.core.known[1])
                 if position == 4:
                     self.assertEqual(9, internal_index)
                     self.assertIn("第5位", completion)
@@ -479,6 +491,7 @@ class TkRulesTests(unittest.TestCase):
 
     def test_human_random_replacement_log_converts_internal_index_to_top_rank(self):
         game, bomb = self._bomb_draw_with_thirteen_remaining(ai=False, debug=False)
+        install_card_layout(game, known_top=3)
         game.gui.prompt_bomb_position = lambda max_pos: None
         with patch.object(game._rng, "randint", return_value=9) as random_position:
             self.assertTrue(game.draw_card(game.player))
@@ -488,7 +501,7 @@ class TkRulesTests(unittest.TestCase):
         self.assertIn("从顶部计", completion)
         self.assertNotIn("(0~", completion)
         self.assertIs(bomb, game.deck.cards[9])
-        self.assertTrue(all(slot["known"] is None for slot in game.ai_known))
+        self.assertEqual([None] * len(game.deck.cards), game.core.known[1])
         self.assert_inventory(game)
 
 
@@ -508,8 +521,8 @@ class ObservationBoundaryTests(unittest.TestCase):
                 raise AssertionError("AI attempted to read a hidden card")
 
         game = new_game()
-        game.deck.cards = CountOnly(len(game.deck.cards))
-        game.player.hand = CountOnly(len(game.player.hand))
+        game.core.deck = CountOnly(len(game.core.deck))
+        game.core.hands[0] = CountOnly(len(game.core.hands[0]))
         observation = ai_player.build_observation(game)
         self.assertEqual(6, observation["opponent_count"])
         self.assertEqual(22, len(observation["known_deck"]))
@@ -527,7 +540,7 @@ class ObservationBoundaryTests(unittest.TestCase):
             game.deck.cards.remove(replacement)
             game.player.hand.append(replacement)
             game.deck.cards.append(old)
-        game._sync_to_core()
+        install_card_layout(game)
         self.assertEqual(first, ai_player.build_observation(game))
         self.assertEqual(set(first), {"player", "current", "remaining", "hand", "opponent_count",
                                      "known_opponent", "known_deck", "discard", "phase", "noped", "winner"})
@@ -537,28 +550,10 @@ class ObservationBoundaryTests(unittest.TestCase):
     def test_known_deck_is_serialized_top_first(self):
         game = new_game()
         visible = list(reversed(game.deck.cards[-3:]))
-        game.ai_on_see_future(visible)
-        game._sync_to_core()
+        install_card_layout(game, known_top=3)
         observation = ai_player.build_observation(game)
         self.assertEqual([ai_player.card_to_wire(card) for card in visible], observation["known_deck"][:3])
         self.assertEqual([None] * (len(game.deck.cards) - 3), observation["known_deck"][3:])
-
-    def test_secret_human_insertion_does_not_leak_position(self):
-        game = new_game()
-        game.ai_on_see_future(list(reversed(game.deck.cards[-3:])))
-        game.deck.cards.insert(2, cards.BombCatCard())
-        game.ai_on_insert_unknown(2)
-        self.assertEqual([{"known": None}] * len(game.deck.cards), game.ai_known)
-
-    def test_own_insertion_preserves_own_information(self):
-        game = new_game()
-        game.ai_on_see_future(list(reversed(game.deck.cards[-3:])))
-        known = game.ai_known[:]
-        bomb = cards.BombCatCard()
-        game.deck.cards.insert(2, bomb)
-        game.ai_on_insert_known(2, bomb)
-        self.assertIs(bomb, game.ai_known[2]["known"])
-        self.assertEqual(known, game.ai_known[:2] + game.ai_known[3:])
 
 
 class AsyncSearchTests(unittest.TestCase):
@@ -601,8 +596,7 @@ class AsyncSearchTests(unittest.TestCase):
         safe = next(card for card in game.deck.cards if not isinstance(card, cards.BombCatCard))
         game.deck.cards.remove(safe)
         game.deck.cards.append(safe)
-        game.ai_on_shuffle()
-        game._sync_to_core()
+        install_card_layout(game)
         ai_player.ai_turn(game)
         count = len(game.deck.cards)
         game.gui.root.grab = object()
@@ -618,8 +612,7 @@ class AsyncSearchTests(unittest.TestCase):
         safe = next(card for card in game.deck.cards if not isinstance(card, cards.BombCatCard))
         game.deck.cards.remove(safe)
         game.deck.cards.append(safe)
-        game.ai_on_shuffle()
-        game._sync_to_core()
+        install_card_layout(game)
         ai_player.ai_turn(game)
         count = len(game.deck.cards)
         game.gui._ai_paused = True

@@ -3,8 +3,10 @@
 """
 import queue
 import re
+import sys
 from tkinter import ttk, messagebox
 from cards import *
+from ai_backend import WORKER_FLAG
 import ai_player as ai_behavior
 from game_controller import Game, Player
 
@@ -746,6 +748,11 @@ class GUI:
 
 def main():
     """主函数"""
+    if sys.argv[1:] == [WORKER_FLAG]:
+        from ai_worker import main as run_worker
+
+        run_worker()
+        return
     root = tk.Tk()
     gui = GUI(root, debug_mode=False)
     root.protocol("WM_DELETE_WINDOW", gui.quit_game)

@@ -2,37 +2,12 @@
 import tkinter as tk
 
 
-CARD_INITIAL_SCORES = {
-    "BombCat": -100,
-    "Defuse": 100,
-    "Nope": 32,
-    "Attack": 35,
-    "PersonalAttack": 20,
-    "Skip": 30,
-    "SuperSkip": 50,
-    "Shuffle": 22,
-    "Swap": 18,
-    "DrawBottom": 26,
-    "SeeFuture": {3: 24, 5: 30},
-    "AlterFuture": {3: 28, 5: 36},
-}
-
-
-def get_card_initial_score(card_key, depth=None):
-    score = CARD_INITIAL_SCORES.get(card_key, 0)
-    if isinstance(score, dict):
-        if depth in score:
-            return score[depth]
-        return next(iter(score.values())) if score else 0
-    return score
-
 class Card:
     """卡牌基类"""
 
-    def __init__(self, name, description, initial_score=0):
+    def __init__(self, name, description):
         self.name = name
         self.description = description
-        self.initial_score = initial_score
 
     def use(self, game, player, target):
         return game.play_card(player, self)
@@ -42,70 +17,70 @@ class BombCatCard(Card):
     """炸弹猫卡"""
 
     def __init__(self):
-        super().__init__("💣炸弹猫", "抽到时必须立即拆除，否则死亡", initial_score=get_card_initial_score("BombCat"))
+        super().__init__("💣炸弹猫", "抽到时必须立即拆除，否则死亡")
 
 
 class DefuseCard(Card):
     """拆除卡"""
 
     def __init__(self):
-        super().__init__("🛠拆除", "拆除炸弹猫并放回牌堆某处", initial_score=get_card_initial_score("Defuse"))
+        super().__init__("🛠拆除", "拆除炸弹猫并放回牌堆某处")
 
 
 class NopeCard(Card):
     """拒绝卡"""
 
     def __init__(self):
-        super().__init__("🚫拒绝", "对手出的下一张牌失效", initial_score=get_card_initial_score("Nope"))
+        super().__init__("🚫拒绝", "对手出的下一张牌失效")
 
 
 class AttackCard(Card):
     """攻击卡"""
 
     def __init__(self):
-        super().__init__("👊攻击", "让对手执行你的所有回合", initial_score=get_card_initial_score("Attack"))
+        super().__init__("👊攻击", "让对手执行你的所有回合")
 
 
 class PersonalAttackCard(Card):
     """自我攻击卡"""
 
     def __init__(self):
-        super().__init__("👋自我攻击", "让自己增加2个回合", initial_score=get_card_initial_score("PersonalAttack"))
+        super().__init__("👋自我攻击", "让自己增加2个回合")
 
 
 class SkipCard(Card):
     """跳过卡"""
 
     def __init__(self):
-        super().__init__("⏭️跳过", "跳过当前回合的抽牌阶段", initial_score=get_card_initial_score("Skip"))
+        super().__init__("⏭️跳过", "跳过当前回合的抽牌阶段")
 
 
 class SuperSkipCard(Card):
     """超级跳过卡"""
 
     def __init__(self):
-        super().__init__("🚀超级跳过", "跳过剩余所有回合的抽牌阶段", initial_score=get_card_initial_score("SuperSkip"))
+        super().__init__("🚀超级跳过", "跳过剩余所有回合的抽牌阶段")
 
 
 class ShuffleCard(Card):
     """洗牌卡"""
 
     def __init__(self):
-        super().__init__("🔀洗牌", "重新洗牌整个牌堆", initial_score=get_card_initial_score("Shuffle"))
+        super().__init__("🔀洗牌", "重新洗牌整个牌堆")
 
 
 class SwapCard(Card):
     """顶底互换卡"""
 
     def __init__(self):
-        super().__init__("🔄顶底互换", "交换牌堆顶部和底部的牌", initial_score=get_card_initial_score("Swap"))
+        super().__init__("🔄顶底互换", "交换牌堆顶部和底部的牌")
 
 
 class DrawBottomCard(Card):
     """抽底卡"""
 
     def __init__(self):
-        super().__init__("👇抽底", "抽取牌堆底部的牌而不是顶部", initial_score=get_card_initial_score("DrawBottom"))
+        super().__init__("👇抽底", "抽取牌堆底部的牌而不是顶部")
 
 
 class SeeFutureCard(Card):
@@ -115,7 +90,6 @@ class SeeFutureCard(Card):
         super().__init__(
             f"👁预见未来{'-' + str(depth) if depth == 5 else ''}",
             f"查看牌堆顶的{depth}张牌",
-            initial_score=get_card_initial_score("SeeFuture", depth=depth),
         )
         self.depth = depth
 
@@ -127,7 +101,6 @@ class AlterFutureCard(Card):
         super().__init__(
             f"🔄改变未来{'-' + str(depth) if depth == 5 else ''}",
             f"查看并排序牌堆顶的{depth}张牌",
-            initial_score=get_card_initial_score("AlterFuture", depth=depth),
         )
         self.depth = depth
 

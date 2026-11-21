@@ -17,6 +17,7 @@ _ROOT = Path(__file__).resolve().parent
 _REQUEST_IDS = itertools.count(1)
 _ACTIVE_TASKS = weakref.WeakSet()
 _CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+WORKER_FLAG = "--ai-worker"
 
 
 def _request(observation, *, iterations=700, time_limit_ms=650, seed=None):
@@ -30,8 +31,12 @@ def _request(observation, *, iterations=700, time_limit_ms=650, seed=None):
 def _execute(request, cancelled=None, started=None):
     if cancelled is not None and cancelled.is_set():
         raise RuntimeError("Search cancelled")
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, WORKER_FLAG]
+    else:
+        command = [sys.executable, "-X", "utf8", "-m", "ai_worker"]
     process = subprocess.Popen(
-        [sys.executable, "-X", "utf8", "-m", "ai_worker"], cwd=_ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        command, cwd=_ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="strict", creationflags=_CREATION_FLAGS,
     )
     if started is not None:

@@ -44,12 +44,27 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(81, responses[1]["id"])
         self.assertIn("action", responses[1])
 
+    def test_application_entry_can_run_worker_without_opening_tk(self):
+        game = new_game()
+        game.current_player = game.ai
+        request = {"version": 1, "id": 82, "observation": ai_player.build_observation(game),
+                   "iterations": 2, "seed": 7}
+        completed = subprocess.run([sys.executable, "main.py", ai_backend.WORKER_FLAG], cwd=ROOT,
+                                   input=json.dumps(request) + "\n", capture_output=True,
+                                   text=True, encoding="utf-8", timeout=15,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        response = json.loads(completed.stdout)
+        self.assertEqual(82, response["id"])
+        self.assertEqual(2, response["iterations"])
+        self.assertIn("action", response)
+
     def test_two_seeded_complete_games_through_original_controller(self):
         searches = 0
 
         def private_choice(game, kind, visible, callback):
             nonlocal searches
-            response = ai_backend.search(ai_player.build_observation(game, kind, visible),
+            response = ai_backend.search(ai_player.build_observation(game),
                                          iterations=8, time_limit_ms=5000, seed=searches + 200)
             searches += 1
             callback(response["action"])
@@ -82,9 +97,6 @@ class BackendIntegrationTests(unittest.TestCase):
                             self.assertTrue(game.play_card(actor, card), (seed, step, card.name))
                     self.assertEqual(original_ids, {id(card) for card in all_cards(game)}, (seed, step))
                     self.assertEqual(34, len(all_cards(game)), (seed, step))
-                    self.assertEqual(len(game.deck.cards), len(game.ai_known), (seed, step))
-                    for slot, actual in zip(game.ai_known, game.deck.cards):
-                        self.assertTrue(slot["known"] is None or slot["known"] is actual, (seed, step))
                     game.core.check_invariants()
                 else:
                     self.fail(f"seed={seed} did not finish within400 actions")

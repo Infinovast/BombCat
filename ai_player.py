@@ -30,158 +30,9 @@ def card_to_wire(card):
     return _CARD_TYPES[type(card)]
 
 
-def _new_unknown_entry():
-    return {"known": None}
-
-
-def _new_known_entry(card):
-    return {"known": card}
-
-
-def init_ai_knowledge(game):
-    game.ai_known = [_new_unknown_entry() for _ in range(len(game.deck.cards))]
-    # The guaranteed opening defuse is public. No opponent cards are inspected.
-    game.ai_known_opponent = ["Defuse"]
-
-
-def _normalize_knowledge(game):
-    game.ai_known = [
-        entry if isinstance(entry, dict) and "known" in entry
-        else _new_unknown_entry() if entry == "unknown"
-        else _new_known_entry(entry)
-        for entry in game.ai_known
-    ]
-
-
-def on_shuffle(game):
-    game.ai_known = [_new_unknown_entry() for _ in range(len(game.deck.cards))]
-
-
-def on_swap_top_bottom(game):
-    _normalize_knowledge(game)
-    if len(game.ai_known) > 1:
-        game.ai_known[0], game.ai_known[-1] = game.ai_known[-1], game.ai_known[0]
-
-
-def on_draw(game, from_bottom=False):
-    """Called after removing the physical card, before resolving the draw."""
-    _normalize_knowledge(game)
-    if not game.ai_known:
-        return
-    known = game.ai_known.pop(0 if from_bottom else -1)["known"]
-    if game.current_player is game.player and known is not None:
-        if not isinstance(known, BombCatCard):
-            game.ai_known_opponent.append(card_to_wire(known))
-
-
-def on_card_played(game, player, card):
-    if player is game.player:
-        key = card_to_wire(card)
-        if key in game.ai_known_opponent:
-            game.ai_known_opponent.remove(key)
-
-
-def on_insert_known(game, pos, card):
-    _normalize_knowledge(game)
-    game.ai_known.insert(pos, _new_known_entry(card))
-
-
-def on_insert_unknown(game, pos):
-    # The human's secret position must not shift the AI's memory precisely.
-    del pos
-    on_shuffle(game)
-
-
-def on_see_future(game, top_cards):
-    """The AI legitimately viewed these cards in top-to-bottom order."""
-    _normalize_knowledge(game)
-    for i, card in enumerate(top_cards):
-        idx = len(game.ai_known) - 1 - i
-        if idx >= 0:
-            game.ai_known[idx] = _new_known_entry(card)
-
-
-def on_remove_top(game, top_count):
-    _normalize_knowledge(game)
-    if top_count > 0:
-        del game.ai_known[-top_count:]
-
-
-def on_append_known(game, top_cards):
-    """Append in physical deck order: lower cards first, top card last."""
-    _normalize_knowledge(game)
-    game.ai_known.extend(_new_known_entry(card) for card in top_cards)
-
-
-def on_append_unknown(game, top_count):
-    _normalize_knowledge(game)
-    game.ai_known.extend(_new_unknown_entry() for _ in range(top_count))
-
-
-def known_positions(game, card_cls):
-    _normalize_knowledge(game)
-    return [i for i, slot in enumerate(game.ai_known)
-            if isinstance(slot["known"], card_cls)]
-
-
-def card_probability_at(game, idx, card_cls):
-    """Estimate from the public inventory and observed cards, never the deck."""
-    _normalize_knowledge(game)
-    if not game.ai_known:
-        return 0.0
-    slot = game.ai_known[idx % len(game.ai_known)]["known"]
-    if slot is not None:
-        return float(isinstance(slot, card_cls))
-    unseen = _PUBLIC_INVENTORY.copy()
-    unseen.subtract(card_to_wire(card) for card in game.ai.hand)
-    unseen.subtract(card_to_wire(card) for card in game.deck.discard_pile)
-    unseen.subtract(game.ai_known_opponent)
-    unseen.subtract(card_to_wire(slot["known"]) for slot in game.ai_known
-                    if slot["known"] is not None)
-    unknown = sum(slot["known"] is None for slot in game.ai_known)
-    bombs = max(0, unseen["Bomb"])
-    if not unknown:
-        return 0.0
-    if card_cls is BombCatCard:
-        return min(1.0, bombs / unknown)
-    if card_cls is SeeFutureCard:
-        count = unseen["See3"] + unseen["See5"]
-    elif card_cls is AlterFutureCard:
-        count = unseen["Alter3"] + unseen["Alter5"]
-    else:
-        count = unseen[_CARD_TYPES[card_cls]]
-    non_bombs = sum(max(0, n) for key, n in unseen.items() if key != "Bomb")
-    return (max(0, unknown - bombs) / unknown * max(0, count) / non_bombs
-            if non_bombs else 0.0)
-
-
-def build_observation(game, kind="Play", cards=()):
-    """Freeze only AI-visible data; the opponent hand is counted, not read."""
-    if hasattr(game, "core"):
-        view = game_core.observation_to_wire(game.core.observation(1))
-        if kind != "Play":
-            view["phase"] = {"kind": kind}
-            if kind == "Arrange":
-                view["phase"]["cards"] = [card_to_wire(card) for card in cards]
-        return view
-    _normalize_knowledge(game)
-    phase = {"kind": kind}
-    if kind == "Arrange":
-        phase["cards"] = [card_to_wire(card) for card in cards]
-    return {
-        "player": 1,
-        "current": 1 if game.current_player is game.ai else 0,
-        "remaining": game.remaining_turns,
-        "hand": sorted(card_to_wire(card) for card in game.ai.hand),
-        "opponent_count": len(game.player.hand),
-        "known_opponent": sorted(game.ai_known_opponent),
-        "known_deck": [card_to_wire(slot["known"]) if slot["known"] else None
-                       for slot in reversed(game.ai_known)],
-        "discard": [card_to_wire(card) for card in game.deck.discard_pile],
-        "phase": phase,
-        "noped": (None if game.noped is None else 1 if game.noped is game.ai else 0),
-        "winner": (0 if not game.ai.alive else 1 if not game.player.alive else None),
-    }
+def build_observation(game):
+    """Serialize the shared rules core's AI-visible snapshot."""
+    return game_core.observation_to_wire(game.core.observation(1))
 
 
 def _short_wire_name(game, key):
@@ -333,7 +184,7 @@ def _start_choice(game, kind, cards, callback):
     if not _is_active(game) or getattr(game, "_ai_pending", False):
         return
     cards = tuple(cards)
-    view = build_observation(game, kind, cards)
+    view = build_observation(game)
     revision = getattr(game, "_turn_revision", 0)
     task = ai_backend.SearchTask(view)
     game._ai_task = task
@@ -344,7 +195,7 @@ def _start_choice(game, kind, cards, callback):
             task.cancel()
             return
         if (not _is_active(game) or getattr(game, "_turn_revision", 0) != revision
-                or build_observation(game, kind, cards) != view):
+                or build_observation(game) != view):
             cancel_search(game)
             return
         # Results cannot advance the game behind an original Tk modal dialog.

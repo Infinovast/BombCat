@@ -31,6 +31,14 @@ python main.py
 
 也可使用 `python dev.py run`；省略 `run` 同样启动游戏。
 
+## Windows 打包
+
+安装 PyInstaller 后，可以打包为单文件 `dist\main.exe`。
+
+```powershell
+python -m PyInstaller -w -F -i pic\app.ico --upx-dir="upx可执行程序所在目录" --clean main.py
+```
+
 ## 操作与规则
 
 - 点击“开始游戏”开局；点击“出牌”选择卡牌，支持双击确认。

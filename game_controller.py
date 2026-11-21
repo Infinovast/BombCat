@@ -79,8 +79,6 @@ class Game:
         self.end_turn = self.end_all_turn = False
         self.turn_owner = self.player
         self.turn_progress = self.turn_total = 1
-        self.ai_known = []
-        self.ai_known_opponent = []
         self._sync_from_core()
         gui.set_game(self)
 
@@ -150,29 +148,6 @@ class Game:
             else:
                 top_first.extend(assign((code,), old_deck))
         self.deck.cards = list(reversed(top_first))
-        self.ai_known = [{"known": top_first[index] if card is not None else None}
-                         for index, card in reversed(list(enumerate(self.core.known[1])))]
-        self.ai_known_opponent = [game_core.card_to_wire(card) for card in self.core.known_opponent[1]]
-
-    def _sync_to_core(self):
-        """Import explicitly arranged view fixtures; normal play only writes through core.apply."""
-        self.core.deck = [_code(card) for card in reversed(self.deck.cards)]
-        self.core.hands = [[_code(card) for card in player.hand] for player in (self.player, self.ai)]
-        self.core.discard = [_code(card) for card in self.deck.discard_pile]
-        self.core.known[1] = [_code(slot["known"]) if slot["known"] is not None else None
-                              for slot in reversed(self.ai_known)]
-        if len(self.core.known[1]) != len(self.core.deck):
-            self.core.known[1] = [None] * len(self.core.deck)
-        self.core.known[0] = [None] * len(self.core.deck)
-        self.core.known_opponent[1] = [game_core.card_from_wire(card) for card in self.ai_known_opponent]
-        for observer in (0, 1):
-            available = Counter(self.core.hands[1 - observer])
-            kept = []
-            for card in self.core.known_opponent[observer]:
-                if available[card]:
-                    kept.append(card)
-                    available[card] -= 1
-            self.core.known_opponent[observer] = kept
 
     def _apply(self, action, *, played=None):
         before = self.core.clone()
@@ -413,18 +388,6 @@ class Game:
 
     def ai_turn(self):
         ai_behavior.ai_turn(self)
-
-    def ai_on_shuffle(self):
-        ai_behavior.on_shuffle(self)
-
-    def ai_on_see_future(self, cards):
-        ai_behavior.on_see_future(self, cards)
-
-    def ai_on_insert_known(self, pos, card):
-        ai_behavior.on_insert_known(self, pos, card)
-
-    def ai_on_insert_unknown(self, pos):
-        ai_behavior.on_insert_unknown(self, pos)
 
     @staticmethod
     def _card_short_name(card):

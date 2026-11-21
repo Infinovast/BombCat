@@ -1,9 +1,11 @@
 """Version-1 JSON-lines interface to the local Python information-set AI."""
 
 import json
+import os
 import random
 import secrets
 import sys
+from contextlib import ExitStack
 
 from game_core import Card, HAND_LIMIT, observation_from_wire
 from search_ai import choose
@@ -109,13 +111,36 @@ def process_line(line):
     return json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
+def _open_windows_pipe(handle_id, mode, flags):
+    # A windowed build can omit sys.stdin/sys.stdout even with inherited pipes.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    get_handle = ctypes.WinDLL("kernel32", use_last_error=True).GetStdHandle
+    get_handle.argtypes = (wintypes.DWORD,)
+    get_handle.restype = wintypes.HANDLE
+    handle = get_handle(handle_id)
+    if handle in (None, ctypes.c_void_p(-1).value):
+        raise OSError("AI worker requires redirected input and output pipes")
+    fd = msvcrt.open_osfhandle(handle, flags | os.O_BINARY)
+    return os.fdopen(fd, mode, encoding="utf-8")
+
+
 def main():
-    if hasattr(sys.stdin, "reconfigure"):
-        sys.stdin.reconfigure(encoding="utf-8")
-        sys.stdout.reconfigure(encoding="utf-8")
-    for line in sys.stdin:
-        if line.strip():
-            print(process_line(line), flush=True)
+    with ExitStack() as pipes:
+        source, output = sys.stdin, sys.stdout
+        if os.name == "nt":
+            if source is None:
+                source = pipes.enter_context(_open_windows_pipe(-10, "r", os.O_RDONLY))
+            if output is None:
+                output = pipes.enter_context(_open_windows_pipe(-11, "w", os.O_WRONLY))
+        for stream in (source, output):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
+        for line in source:
+            if line.strip():
+                print(process_line(line), file=output, flush=True)
 
 
 if __name__ == "__main__":
